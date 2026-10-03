@@ -98,7 +98,7 @@ if [ "$(jq 'if type == "array" then length else 0 end' "$WORK/signatures.json")"
   echo "::error::${ROLE}: cosign reported no signature for ${REF}." >&2
   exit 1
 fi
-if [ -n "$EXPECTED_DIGEST" ] && ! jq -e --arg d "sha256:${EXPECTED_DIGEST}" \
+if ! jq -e --arg d "sha256:${EXPECTED_DIGEST}" \
      'all(.[]; .critical.image["docker-manifest-digest"] == $d)' "$WORK/signatures.json" > /dev/null; then
   echo "::error::${ROLE}: the verified signature is on a different digest than ${REF}." >&2
   exit 1
@@ -110,23 +110,16 @@ cosign_verify_with_either_timestamp "$WORK/attestations.jsonl" verify-attestatio
   --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER" \
   "$REF"
-# One DSSE envelope per line; the in-toto statement is its base64 payload.
-: > "$WORK/statements.jsonl"
-while IFS= read -r payload; do
-  [ -n "$payload" ] || continue
-  printf '%s' "$payload" | base64 -d >> "$WORK/statements.jsonl"
-  echo >> "$WORK/statements.jsonl"
-done < <(jq -r '.payload // empty' "$WORK/attestations.jsonl")
-
+# cosign prints each verified in-toto statement directly as JSON.
 VERDICT="$(jq -s -r --arg d "$EXPECTED_DIGEST" --arg p "$EXPECTED_BUILDER_PREFIX" '
   map(select(.predicateType == "https://slsa.dev/provenance/v0.2"))
   | map({subjects: [.subject[]?.digest.sha256? // empty], builder: (.predicate.builder.id // "")})
-  | map(select(($d == "" or (.subjects | index($d) != null)) and (.builder | startswith($p))))
+  | map(select((.subjects | index($d) != null) and (.builder | startswith($p))))
   | if length > 0 then "ok " + .[0].builder else "none" end
-' "$WORK/statements.jsonl")"
+' "$WORK/attestations.jsonl")"
 if [ "$VERDICT" = "none" ]; then
   echo "::error::${ROLE}: no SLSA v0.2 provenance on ${REF} has subject sha256:${EXPECTED_DIGEST:-<tag>} and a builder under ${EXPECTED_BUILDER_PREFIX}. Statements seen:" >&2
-  jq -c '{predicateType, subjects: [.subject[]?.digest.sha256? // empty], builder: (.predicate.builder.id // "")}' "$WORK/statements.jsonl" >&2 || true
+  jq -c '{predicateType, subjects: [.subject[]?.digest.sha256? // empty], builder: (.predicate.builder.id // "")}' "$WORK/attestations.jsonl" >&2 || true
   exit 1
 fi
 echo "${ROLE}: signature and provenance verified — identity ${IDENTITY}, builder ${VERDICT#ok }"
