@@ -58,7 +58,8 @@ elif [[ "$REF" == *@* ]]; then
   echo "::error::${ROLE} image reference '${REF}' has a malformed digest suffix (expected @sha256:<64 lowercase hex>)." >&2
   exit 1
 else
-  echo "::warning::${ROLE} image reference '${REF}' carries no digest; the signature and attestation are checked against whatever the tag resolves to right now."
+  echo "::error::${ROLE} image reference '${REF}' must include an immutable @sha256 digest." >&2
+  exit 1
 fi
 
 WORK="$(mktemp -d)"
