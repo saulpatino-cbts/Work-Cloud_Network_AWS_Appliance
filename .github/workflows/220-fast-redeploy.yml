@@ -126,8 +126,9 @@ jobs:
           [ -z "$INPUT_WORKER_IMAGE" ] || validate_image_ref worker "$INPUT_WORKER_IMAGE"
           [ -z "$INPUT_WEB_IMAGE" ]    || validate_image_ref web "$INPUT_WEB_IMAGE"
 
-      # The Azure version needs no checkout (az does it all); the ECS roll is a
-      # script under scripts/ci so the three service steps stay one line each.
+      # The checkout serves the signature verifier below (as in the Azure
+      # version) and the ECS roll script under scripts/ci, which keeps the
+      # three service steps one line each.
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

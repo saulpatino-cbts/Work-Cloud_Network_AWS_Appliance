@@ -99,7 +99,7 @@ jobs:
           AWS_REGION:              ${{ vars.AWS_REGION }}
           AWS_REGION_SHORT:        ${{ vars.AWS_REGION_SHORT }}
           DOCKERHUB_NAMESPACE:     ${{ vars.DOCKERHUB_NAMESPACE }}
-          IMAGE_SIGNING_IDENTITY: ${{ vars.IMAGE_SIGNING_IDENTITY }}
+          IMAGE_SIGNING_IDENTITY:  ${{ vars.IMAGE_SIGNING_IDENTITY }}
           CNA_ENTRA_TENANT_ID:     ${{ vars.CNA_ENTRA_TENANT_ID }}
           CNA_ENTRA_CLIENT_ID:     ${{ vars.CNA_ENTRA_CLIENT_ID }}
           CORE_REPO:               ${{ vars.CORE_REPO }}
