@@ -353,3 +353,17 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   step to add the `-var` lines to — T-101 must pass `azure_mcp_endpoint`, `azure_mcp_transport`,
   `aws_mcp_endpoint`, `aws_mcp_transport` and `drawio_mcp_url` from the `CNA_*` repository
   variables the way Azure's `210` does.
+
+### T-114 — Mirror the cosign attestation parsing fix in the Azure appliance
+
+- **Origin:** PR #16 review, 2026-10-03.
+- **Priority:** High
+- **Description:** The shared `scripts/ci/verify_image_signature.sh` now reads the in-toto
+  statements that cosign prints directly as JSON. The Azure sibling still needs the same fix so
+  both appliances can verify valid provenance attestations.
+- **Dependencies:** None.
+- **Recommended action:** In
+  `saulpatinojr/Work-Cloud_Network_Azure_Appliance/scripts/ci/verify_image_signature.sh`, replace
+  the DSSE `.payload` extraction and base64 decoding with parsing of cosign's direct JSON
+  statements, and require their subject digest to match the deployed immutable reference.
+- **Status:** Open — this repository cannot update the sibling appliance in this change.
