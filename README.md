@@ -109,6 +109,10 @@ Every operation is a workflow run from the **Actions → Run workflow** dialog, 
    a tag-only reference is accepted with a warning. `prod` applies run under the `hub` environment
    and wait for its required reviewers.
 
+   Before the plan, `210` verifies every image's cosign signature and SLSA provenance against
+   `IMAGE_SIGNING_IDENTITY` (the core's `200-build-images` identity); `220` does the same for each
+   image it rolls. An image the core did not build and sign is refused, whatever its tag says.
+
 Flipping `ai_mode` on a live environment destroys or creates the cloud AI resources — record the
 decision in `REVIEW.md` first.
 
@@ -158,6 +162,7 @@ Configuration comes from three places, in this order of authority:
 | Secret | `DOCKERHUB_TOKEN` | Pull access for the private `cna` images |
 | Secret | `CNA_POSTGRES_ADMIN_PASSWORD`, `CNA_ENTRA_CLIENT_SECRET`, `CNA_NEXTAUTH_SECRET`, `CNA_CREDENTIAL_ENCRYPTION_KEY` | Runtime secrets Terraform writes to AWS Secrets Manager (`100` checks them) |
 | Variable | `CORE_REPO` | Core repository name (`Work-Cloud_Network_Core`) — where `230` polls the manifest |
+| Variable | `IMAGE_SIGNING_IDENTITY` | The core's signing identity, `https://github.com/<owner>/<core>/.github/workflows/200-build-images.yml@refs/heads/main` — `210` and `220` refuse any image whose signature and provenance do not verify against it (`100` checks it is set) |
 | Variable | `DOCKERHUB_NAMESPACE` | Docker Hub namespace of the `cna` images |
 | Variable | `AUTO_UPDATE_DEV` | `false` freezes dev; anything else lets `230` redeploy it |
 | Variable | `TFSTATE_BUCKET`, `TFSTATE_LOCK_TABLE`, `AWS_REGION`, `AWS_REGION_SHORT` | State backend and region for the roots |
