@@ -143,7 +143,7 @@ permissions:
   attestations: write
 
 concurrency:
-  group: deploy-${{ inputs.environment || 'schedule' }}
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 env:
@@ -311,6 +311,22 @@ jobs:
           if [[ -n "$EXPECTED_ACCOUNT_ID" && "$EXPECTED_ACCOUNT_ID" != "none" && "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
             echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID"
             exit 1
+          fi
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+
+      # The identity module CREATES the GitHub OIDC provider, but AWS permits
+      # exactly one per account. If the target account already federates GitHub
+      # Actions, the first apply fails on a duplicate create (review AWS-F-01 /
+      # REVIEW.md R-003). This read-only check surfaces the collision now and
+      # prints the exact import command, instead of a confusing mid-apply
+      # EntityAlreadyExists. Non-fatal: a greenfield account simply has none.
+      - name: Check for an existing GitHub OIDC provider (AWS-F-01)
+        run: |
+          ARN="arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
+          if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$ARN" >/dev/null 2>&1; then
+            echo "::warning::A GitHub OIDC provider already exists in account ${ACCOUNT_ID}. AWS allows only one, so the identity module's create will fail the first apply. Import it first: terraform -chdir=infra/terraform/environments/${ENVIRONMENT}/workload import module.identity.aws_iam_openid_connect_provider.github ${ARN}"
+          else
+            echo "No existing GitHub OIDC provider in ${ACCOUNT_ID}; the identity module will create it."
           fi
 
       - name: Validate PostgreSQL password is set
