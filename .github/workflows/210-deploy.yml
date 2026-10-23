@@ -423,7 +423,18 @@ jobs:
           # are written to satisfy (encryption at rest, no public exposure, TLS,
           # logging, IAM hygiene). Both roots are scanned from the environment dir.
           CURATED_CHECKS="CKV_AWS_16,CKV_AWS_17,CKV_AWS_19,CKV_AWS_21,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_2,CKV_AWS_103,CKV_AWS_131,CKV_AWS_34,CKV_AWS_68,CKV_AWS_7,CKV_AWS_65,CKV_AWS_66,CKV_AWS_333,CKV_AWS_393,CKV2_AWS_6,CKV2_AWS_11,CKV2_AWS_20,CKV2_AWS_72"
-          "$CHECKOV" -d .. --framework terraform --check "$CURATED_CHECKS" --output cli
+          # Record the REAL scan result, not a literal: capture Checkov's exit
+          # code and gate on it. A non-zero exit means a curated check failed —
+          # write "failed" and fail the step, never record "passed" regardless
+          # of the result (AWS-F-09 / CR-AZ-01).
+          RC=0
+          "$CHECKOV" -d .. --framework terraform --check "$CURATED_CHECKS" --output cli || RC=$?
+          if [ "$RC" -ne 0 ]; then
+            printf '{"status":"failed","blocking":true,"checks":"%s"}\n' "$CURATED_CHECKS" > "$GATE"
+            cat "$GATE"
+            echo "::error::Checkov curated gate failed (exit $RC); release blocked."
+            exit "$RC"
+          fi
           printf '{"status":"passed","blocking":true,"checks":"%s"}\n' "$CURATED_CHECKS" > "$GATE"
           cat "$GATE"
 

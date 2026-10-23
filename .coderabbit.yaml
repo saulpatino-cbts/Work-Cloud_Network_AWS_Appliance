@@ -1,0 +1,60 @@
+# CodeRabbit configuration — Cloud Network AWS Appliance
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+#
+# This is the AWS appliance: Terraform + deploy/operate workflows. The two
+# appliances are meant to be identical except cloud-specific parts, so the key
+# review concern is: is this change shared-surface, and if so is the Azure
+# sibling (and the core, for contract changes) notified? See CLAUDE.md
+# "Cross-repo change notification".
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "infra/terraform/**"
+      instructions: >
+        AWS Terraform. No hardcoded values at a call site — regions, endpoints
+        and account ids are variables resolved at runtime; variables a human
+        must supply take no default. Watch first-deploy hazards flagged in
+        .reports: the OIDC provider is created-not-imported (duplicate fails the
+        apply), the ALB HTTPS listener is count=0 without a certificate (502
+        trap), and the deploy role is broad — do not widen its trust beyond the
+        intended branches/environments. Platform outputs flow to the workload as
+        -var (split state); confirm every consumed output exists. All changes to
+        module bodies / OIDC / state backend / Secrets Manager / Bedrock / S3
+        publish are cloud-specific and stay in this repo; anything else is
+        shared-surface and the Azure sibling must be notified.
+    - path: ".github/workflows/**"
+      instructions: >
+        Every GitHub Action must be pinned to a full commit SHA, never a tag.
+        Secrets never reach a run: block unquoted, never a workflow_dispatch
+        input, never -var on a command line (use TF_VAR_* env). Workflow numbers
+        are stable across all three repos — never renumber. A workflow edit is
+        almost always SHARED-SURFACE: flag that the Azure sibling needs the same
+        change and a .reports/change-reports/ handover note. Checkov gate must
+        record the real scan result, not a hardcoded "passed".
+    - path: "scripts/ci/**"
+      instructions: >
+        These CI helper scripts are shared byte-for-byte with the Azure
+        appliance. Any change here MUST be mirrored to the sibling and a handover
+        note written. Flag divergence.
+  tools:
+    actionlint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    checkov:
+      enabled: true
+
+chat:
+  auto_reply: true
