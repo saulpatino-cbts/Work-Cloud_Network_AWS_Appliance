@@ -90,6 +90,13 @@ Every operation is a workflow run from the **Actions → Run workflow** dialog, 
 
 ### First deploy of an environment
 
+0. **Run `scripts/Initialize-CnaAwsGitHubSecrets.ps1` first** (one-time, as an AWS account
+   admin with your own `aws` and `gh` sessions). Every workflow — including `000` — authenticates
+   by assuming the `AWS_DEPLOY_ROLE_ARN` OIDC role, which does **not exist on a cold account**.
+   This script creates the OIDC provider and deploy role, the state bucket and lock table, the
+   `dev`/`prod`/`hub` environments, and writes the secrets/variables the workflows need. `000` is
+   then an idempotent confirm-and-converge pass over what the script made — not the true bootstrap.
+   (Without this step, `000` fails immediately on "could not assume role". See `REVIEW.md` R-001 – R-003.)
 1. **`000 · Bootstrap Backend`** — creates the Terraform state backend for the environment.
 2. **`100 · Validate Prerequisites`** — read-only check that every secret, variable and identity
    the deploy needs is in place. Fix what it reports before going on.

@@ -52,3 +52,17 @@ variable "enable_xray" {
   type        = bool
   default     = true
 }
+
+# ─── OIDC deploy-role trust scoping (review AWS-F-03 / REVIEW.md R-011) ────────
+variable "default_branch" {
+  description = "Default branch whose GitHub Actions runs may assume the deploy role (e.g. main). Used to scope the OIDC trust subject away from any-branch."
+  type        = string
+  default     = "main"
+}
+
+variable "deploy_trusted_subjects" {
+  description = "Override the OIDC trust subjects for the deploy role. Empty (default) scopes trust to the default branch plus the dev/prod/hub environments. Set explicitly (e.g. for a reusable workflow in another repo) — never widen to a blanket 'repo:owner/repo:*'."
+  type        = list(string)
+  default     = []
+  nullable    = false
+}

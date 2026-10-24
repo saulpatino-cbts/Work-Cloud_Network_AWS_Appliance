@@ -200,10 +200,15 @@ data "aws_iam_policy_document" "github_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # Trust is scoped to the subjects that actually deploy, not every branch/PR
+    # (review AWS-F-03 / REVIEW.md R-011). `repo:...:*` let any branch or pull
+    # request assume this near-admin role; restrict to the default branch and the
+    # deploy environments. Widen deliberately via var.deploy_trusted_subjects if
+    # a reusable workflow or another ref ever needs it — never back to `*`.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_owner}/${var.github_repository}:*"]
+      values   = local.deploy_trusted_subjects
     }
   }
 }

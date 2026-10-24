@@ -156,7 +156,19 @@ jobs:
 
           # AI/MCP variables are optional and fall back to Terraform defaults at deploy time.
           check_optional_var "AWS_TARGET_ACCOUNT_ID"   "$AWS_TARGET_ACCOUNT_ID"
-          check_optional_var "CNA_ALB_CERTIFICATE_ARN" "$CNA_ALB_CERTIFICATE_ARN"
+
+          # The ALB certificate is the 502 trap (REVIEW.md R-013 / review AWS-F-02,
+          # AWS-F-15): CloudFront's origin is https-only, so with no certificate
+          # the ALB has no HTTPS listener and EVERY request returns 502. We do not
+          # hard-fail here — a deliberate dev bring-up on the default CloudFront
+          # domain is valid — but the consequence must be loud at preflight, not
+          # discovered as a dead site after a green deploy.
+          if [[ -z "$CNA_ALB_CERTIFICATE_ARN" || "$CNA_ALB_CERTIFICATE_ARN" == "none" ]]; then
+            echo "| \`CNA_ALB_CERTIFICATE_ARN\` | _not configured_ | ⚠️ 502 risk |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::CNA_ALB_CERTIFICATE_ARN is not set. CloudFront talks to the ALB over HTTPS only; with no ACM certificate the ALB has no HTTPS listener and every request will return 502 (REVIEW.md R-013). Set the certificate before a customer-facing deploy, or accept a non-serving edge for a topology-only dev bring-up."
+          else
+            echo "| \`CNA_ALB_CERTIFICATE_ARN\` | \`$CNA_ALB_CERTIFICATE_ARN\` | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           # CNA_NEXTAUTH_URL is NOT checked here: this job runs with no
           # `environment:` key (it's a repo-level preflight, see the header

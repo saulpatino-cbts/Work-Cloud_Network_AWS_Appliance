@@ -192,6 +192,11 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **Status:** Blocked on T-106.
 - **Notes for future engineers:** The parity matrix as authored —
 
+  > **Evidence caveat (review AWS-F-12 / AWS-F-17):** every row below is verified
+  > by **code inspection only, not a live apply** — nothing has run against an
+  > account. Read "parity" as "designed to match Azure," not "proven equivalent."
+  > Two rows do not fully hold and carry footnotes.
+
   | Capability | Azure | AWS |
   |---|---|---|
   | Compute (3 containers) | Container Apps | ECS Fargate + ALB |
@@ -200,13 +205,22 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   | WAF Auth.js exclusions | Field-specific exclusions | Custom rules (query params, cookies, headers) |
   | Identity + KMS | Managed Identity + Key Vault RBAC | IAM roles + KMS CMK + GitHub OIDC |
   | Secrets | Key Vault | Secrets Manager |
-  | Storage | Storage Account (blob) | S3 (artifacts + static site) |
+  | Storage **¹** | Storage Account (blob) | S3 (artifacts + static site) |
   | AI model management | AI Foundry + `cognitive_deployment` | Bedrock inference profile + optional provisioned throughput |
   | Distributed tracing | Application Insights | X-Ray (daemon sidecar + sampling rules) |
   | Observability | Log Analytics + diagnostics + flow logs | CloudWatch log groups + metric filters + alarms + VPC flow logs |
   | Private networking | Private endpoints (storage, KV, AI) | VPC endpoints (9) |
-  | Scale-to-zero | Container Apps `min_replicas=0` | Application Auto Scaling (CPU + memory + ALB requests) |
+  | Scale-to-zero **²** | Container Apps `min_replicas=0` | Application Auto Scaling (CPU + memory + ALB requests) |
   | VPC/networking | VNet + NSG + subnets | VPC + security groups + 3-tier subnets + NAT |
+
+  > **¹ Storage — infrastructure parity only.** The S3 buckets exist, but the
+  > core web tier has no S3 code path (`apps/cna-web/lib/blob.ts` is Azure-Blob
+  > only — review AWS-F-04 / `REVIEW.md` R-012), so document upload and the
+  > client portal do not function on AWS until the core gains an S3 path.
+  > **² Scale-to-zero — not full parity, by design.** AWS cannot scale the api
+  > and web services from zero (target-tracking autoscaling needs datapoints), so
+  > their floor is `max(1, min_count)`; only the worker truly scales to zero.
+  > Azure Container Apps scales all three to zero. (review AWS-F-17)
 
 ### T-109 — Optional Route 53 + ACM certificate validation flow
 

@@ -143,7 +143,7 @@ permissions:
   attestations: write
 
 concurrency:
-  group: deploy-${{ inputs.environment || 'schedule' }}
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 env:
@@ -312,6 +312,22 @@ jobs:
             echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID"
             exit 1
           fi
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+
+      # The identity module CREATES the GitHub OIDC provider, but AWS permits
+      # exactly one per account. If the target account already federates GitHub
+      # Actions, the first apply fails on a duplicate create (review AWS-F-01 /
+      # REVIEW.md R-003). This read-only check surfaces the collision now and
+      # prints the exact import command, instead of a confusing mid-apply
+      # EntityAlreadyExists. Non-fatal: a greenfield account simply has none.
+      - name: Check for an existing GitHub OIDC provider (AWS-F-01)
+        run: |
+          ARN="arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
+          if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$ARN" >/dev/null 2>&1; then
+            echo "::warning::A GitHub OIDC provider already exists in account ${ACCOUNT_ID}. AWS allows only one, so the identity module's create will fail the first apply. Import it first: terraform -chdir=infra/terraform/environments/${ENVIRONMENT}/workload import module.identity.aws_iam_openid_connect_provider.github ${ARN}"
+          else
+            echo "No existing GitHub OIDC provider in ${ACCOUNT_ID}; the identity module will create it."
+          fi
 
       - name: Validate PostgreSQL password is set
         env:
@@ -423,7 +439,18 @@ jobs:
           # are written to satisfy (encryption at rest, no public exposure, TLS,
           # logging, IAM hygiene). Both roots are scanned from the environment dir.
           CURATED_CHECKS="CKV_AWS_16,CKV_AWS_17,CKV_AWS_19,CKV_AWS_21,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_2,CKV_AWS_103,CKV_AWS_131,CKV_AWS_34,CKV_AWS_68,CKV_AWS_7,CKV_AWS_65,CKV_AWS_66,CKV_AWS_333,CKV_AWS_393,CKV2_AWS_6,CKV2_AWS_11,CKV2_AWS_20,CKV2_AWS_72"
-          "$CHECKOV" -d .. --framework terraform --check "$CURATED_CHECKS" --output cli
+          # Record the REAL scan result, not a literal: capture Checkov's exit
+          # code and gate on it. A non-zero exit means a curated check failed —
+          # write "failed" and fail the step, never record "passed" regardless
+          # of the result (AWS-F-09 / CR-AZ-01).
+          RC=0
+          "$CHECKOV" -d .. --framework terraform --check "$CURATED_CHECKS" --output cli || RC=$?
+          if [ "$RC" -ne 0 ]; then
+            printf '{"status":"failed","blocking":true,"checks":"%s"}\n' "$CURATED_CHECKS" > "$GATE"
+            cat "$GATE"
+            echo "::error::Checkov curated gate failed (exit $RC); release blocked."
+            exit "$RC"
+          fi
           printf '{"status":"passed","blocking":true,"checks":"%s"}\n' "$CURATED_CHECKS" > "$GATE"
           cat "$GATE"
 
@@ -1417,9 +1444,11 @@ jobs:
           MAX_ATTEMPTS=20
           ATTEMPT=0
           REACHABLE=0
+          LAST_CODE="000"
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$EDGE_HOST/" || echo "000")
+            LAST_CODE="$HTTP_CODE"
             echo "  Attempt $ATTEMPT/$MAX_ATTEMPTS — HTTP $HTTP_CODE"
             # 200/302/307 = success/redirect; 401/403 = auth wall (app is up); 404/502/503 = not ready
             if [[ "$HTTP_CODE" =~ ^(200|302|307|401|403)$ ]]; then
@@ -1433,9 +1462,35 @@ jobs:
           if [ $REACHABLE -eq 0 ]; then
             echo "App not reachable after $((MAX_ATTEMPTS * 15))s — waiting 5 extra minutes as fallback"
             sleep 300
-          else
+            # Re-probe once after the fallback window so the terminal decision
+            # reflects the endpoint's current state, not the last poll attempt.
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$EDGE_HOST/" || echo "000")
+            LAST_CODE="$HTTP_CODE"
+            echo "Post-fallback probe — HTTP $HTTP_CODE"
+            if [[ "$HTTP_CODE" =~ ^(200|302|307|401|403)$ ]]; then
+              echo "App reachable (HTTP $HTTP_CODE) after fallback — proceeding"
+              REACHABLE=1
+            fi
+          fi
+
+          # Hard gate (AWS-F-15): a CloudFront endpoint that never leaves HTTP 502
+          # across the whole poll + fallback window is a failed deploy, not a
+          # "not ready" one. The ALB target group can read 'healthy' — the ECS
+          # tasks behind it are fine — while every request still returns 502
+          # because the HTTPS listener / certificate is missing
+          # (CNA_ALB_CERTIFICATE_ARN; see the AWS-F-02 prereq warning). Healthy
+          # targets do NOT mean the site works, so do not let a persistent 502
+          # fall through and be recorded as a healthy deploy.
+          if [ $REACHABLE -eq 0 ] && [ "$LAST_CODE" = "502" ]; then
+            echo "::error::CloudFront endpoint https://$EDGE_HOST/ returned HTTP 502 on every request across the full poll and fallback window and never reached a healthy status. This is almost always a missing HTTPS listener / certificate (CNA_ALB_CERTIFICATE_ARN) on the ALB — not an unhealthy app. ALB target-group health reading 'healthy' does NOT mean the site works: the tasks are up but the edge cannot complete a request. Failing the deploy. Set CNA_ALB_CERTIFICATE_ARN (see the AWS-F-02 prerequisite warning) and re-run."
+            exit 1
+          fi
+
+          if [ $REACHABLE -eq 1 ]; then
             echo "Waiting 2 minutes for target-group health checks to settle..."
             sleep 120
+          else
+            echo "::warning::App did not return a healthy status within the poll + fallback window (last HTTP $LAST_CODE); the ALB target-health check below is the remaining gate."
           fi
 
       # The AWS stand-in for Front Door's OriginHealthPercentage: the share of
