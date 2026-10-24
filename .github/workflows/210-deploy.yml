@@ -1444,9 +1444,11 @@ jobs:
           MAX_ATTEMPTS=20
           ATTEMPT=0
           REACHABLE=0
+          LAST_CODE="000"
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$EDGE_HOST/" || echo "000")
+            LAST_CODE="$HTTP_CODE"
             echo "  Attempt $ATTEMPT/$MAX_ATTEMPTS — HTTP $HTTP_CODE"
             # 200/302/307 = success/redirect; 401/403 = auth wall (app is up); 404/502/503 = not ready
             if [[ "$HTTP_CODE" =~ ^(200|302|307|401|403)$ ]]; then
@@ -1460,9 +1462,35 @@ jobs:
           if [ $REACHABLE -eq 0 ]; then
             echo "App not reachable after $((MAX_ATTEMPTS * 15))s — waiting 5 extra minutes as fallback"
             sleep 300
-          else
+            # Re-probe once after the fallback window so the terminal decision
+            # reflects the endpoint's current state, not the last poll attempt.
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$EDGE_HOST/" || echo "000")
+            LAST_CODE="$HTTP_CODE"
+            echo "Post-fallback probe — HTTP $HTTP_CODE"
+            if [[ "$HTTP_CODE" =~ ^(200|302|307|401|403)$ ]]; then
+              echo "App reachable (HTTP $HTTP_CODE) after fallback — proceeding"
+              REACHABLE=1
+            fi
+          fi
+
+          # Hard gate (AWS-F-15): a CloudFront endpoint that never leaves HTTP 502
+          # across the whole poll + fallback window is a failed deploy, not a
+          # "not ready" one. The ALB target group can read 'healthy' — the ECS
+          # tasks behind it are fine — while every request still returns 502
+          # because the HTTPS listener / certificate is missing
+          # (CNA_ALB_CERTIFICATE_ARN; see the AWS-F-02 prereq warning). Healthy
+          # targets do NOT mean the site works, so do not let a persistent 502
+          # fall through and be recorded as a healthy deploy.
+          if [ $REACHABLE -eq 0 ] && [ "$LAST_CODE" = "502" ]; then
+            echo "::error::CloudFront endpoint https://$EDGE_HOST/ returned HTTP 502 on every request across the full poll and fallback window and never reached a healthy status. This is almost always a missing HTTPS listener / certificate (CNA_ALB_CERTIFICATE_ARN) on the ALB — not an unhealthy app. ALB target-group health reading 'healthy' does NOT mean the site works: the tasks are up but the edge cannot complete a request. Failing the deploy. Set CNA_ALB_CERTIFICATE_ARN (see the AWS-F-02 prerequisite warning) and re-run."
+            exit 1
+          fi
+
+          if [ $REACHABLE -eq 1 ]; then
             echo "Waiting 2 minutes for target-group health checks to settle..."
             sleep 120
+          else
+            echo "::warning::App did not return a healthy status within the poll + fallback window (last HTTP $LAST_CODE); the ALB target-health check below is the remaining gate."
           fi
 
       # The AWS stand-in for Front Door's OriginHealthPercentage: the share of
