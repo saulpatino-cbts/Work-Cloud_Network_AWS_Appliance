@@ -11,15 +11,23 @@ variable "environment" {
 }
 
 variable "region" {
-  description = "AWS region"
+  description = "AWS region for the CNA Platform deployment, e.g. us-east-1 or eu-west-1. You must set this; there is no default so no region is ever assumed for you. See the AWS Regions list: https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html"
   type        = string
-  default     = "us-east-1"
+
+  validation {
+    condition     = length(trimspace(var.region)) > 0
+    error_message = "Set region to your chosen AWS region (for example us-east-1). It has no default on purpose."
+  }
 }
 
 variable "region_short" {
-  description = "Short region code used in resource naming (mirrors Azure's var.region_short)"
+  description = "Short code for your region, used in resource naming so names stay readable and unique (mirrors Azure's var.region_short), e.g. use1 for us-east-1. You choose it; there is no default."
   type        = string
-  default     = "use1"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{2,8}$", var.region_short))
+    error_message = "Set region_short to a short lowercase code (2-8 letters/digits), for example use1 for us-east-1."
+  }
 }
 
 # ─── GitHub ───────────────────────────────────────────────────────────────────

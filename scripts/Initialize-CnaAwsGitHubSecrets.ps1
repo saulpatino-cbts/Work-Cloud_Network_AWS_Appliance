@@ -95,9 +95,15 @@ param(
 
     [string]$ProjectName = "cna",
 
-    [string]$Region = "us-east-1",
+    # Your AWS region. No default on purpose, so no region is ever assumed for
+    # you. Pass -Region, or leave it blank and the script will ask.
+    # AWS Regions: https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html
+    [string]$Region = "",
 
-    [string]$RegionShort = "use1",
+    # Short lowercase code for your region (e.g. use1 for us-east-1), used in
+    # resource names. No default on purpose. Pass -RegionShort, or leave it blank
+    # and the script will ask.
+    [string]$RegionShort = "",
 
     [string]$TfstateBucket = "",
 
@@ -241,6 +247,34 @@ function Confirm-GitHubEnvironment {
 Write-Step "Checking prerequisites"
 Assert-Command aws
 if (-not $SkipGitHub) { Assert-Command gh }
+
+# Region is never assumed for you. If you did not pass -Region / -RegionShort,
+# ask now, before any AWS call uses it. These feed resource names, the S3 state
+# bucket and the AWS_REGION / AWS_REGION_SHORT GitHub variables below.
+#
+# Normalize (trim + lowercase) and validate against the SAME contracts the
+# Terraform variables enforce, so a bad value is caught here -- before any OIDC,
+# role or bucket resource is created -- instead of failing a later plan.
+#   region       : lowercase letters, digits, hyphens (e.g. us-east-1)
+#   region_short : ^[a-z0-9]{2,8}$ (e.g. use1)  -- mirrors variables.tf
+Write-Step "Choosing your AWS region"
+$Region = $Region.Trim().ToLowerInvariant()
+while ($Region -notmatch '^[a-z0-9-]{3,}$') {
+    if (-not [string]::IsNullOrWhiteSpace($Region)) {
+        Write-Warn "'$Region' is not a valid AWS region id (lowercase letters, digits and hyphens, e.g. us-east-1)."
+    }
+    Write-Info "Pick a region from https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html"
+    $Region = (Read-Host "AWS region (e.g. us-east-1)").Trim().ToLowerInvariant()
+}
+$RegionShort = $RegionShort.Trim().ToLowerInvariant()
+while ($RegionShort -notmatch '^[a-z0-9]{2,8}$') {
+    if (-not [string]::IsNullOrWhiteSpace($RegionShort)) {
+        Write-Warn "'$RegionShort' is not a valid short code (2-8 lowercase letters/digits, no hyphens, e.g. use1)."
+    }
+    Write-Info "Pick a short lowercase code for that region; it goes into resource names."
+    $RegionShort = (Read-Host "Short region code (e.g. use1 for us-east-1)").Trim().ToLowerInvariant()
+}
+Write-Ok "Region: $Region (short code: $RegionShort)"
 
 $identity = Invoke-Aws -Arguments @("sts", "get-caller-identity")
 $accountId = [string]$identity.Account

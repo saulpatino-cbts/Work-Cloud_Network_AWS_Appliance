@@ -8,13 +8,13 @@ human intro page; this file states the rules an agent must not infer wrongly.
 This is the **AWS appliance** for the Cloud Network Assessment (CNA)
 platform: AWS Terraform plus the workflows that deploy, update,
 watch and tear down an environment. It runs container images built by the
-**core** repository, <https://github.com/saulpatinojr/Work-Cloud_Network_Core>.
+**core** repository, <https://github.com/saulpatino-cbts/Work-Cloud_Network_Core>.
 
 - **Application code never lives here.** No `apps/`, no `cna/`, no Dockerfiles.
   A feature is implemented once in the core; both appliances receive it through
   the images (`docker.io/<namespace>/cna:{api,worker,web,migrator}-sha-<7>`).
 - **Nothing for Azure lives here.** The sibling appliance is
-  <https://github.com/saulpatinojr/Work-Cloud_Network_Azure_Appliance>. Do not add Azure
+  <https://github.com/saulpatino-cbts/Work-Cloud_Network_Azure_Appliance>. Do not add Azure
   Terraform, actions, secrets, regions or wording to this repository.
 
 ## Cross-repo change notification (mandatory)

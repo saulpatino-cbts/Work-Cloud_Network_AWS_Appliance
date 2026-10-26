@@ -245,7 +245,7 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **Priority:** High
 - **Category:** Operational safety
 - **Description:** `350-drift-dev.yml` runs on a schedule and failed **every day from 2026-07-21
-  to 2026-08-28** with `ResourceGroupNotFound: rg-cna-dev-scus-tfstate`. That failure was the
+  to 2026-08-28** with `ResourceGroupNotFound: rg-cna-<env>-<region_short>-tfstate`. That failure was the
   first and clearest evidence that the dev environment had been deleted out of band, including its
   Terraform state backend — the single fact that would have changed the plan for the 0.9.0 demo
   work, five weeks before anyone discovered it by trying to deploy (`the core's CNA-0.90-updates.md` §5).
@@ -377,7 +377,7 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   both appliances can verify valid provenance attestations.
 - **Dependencies:** None.
 - **Recommended action:** In
-  `saulpatinojr/Work-Cloud_Network_Azure_Appliance/scripts/ci/verify_image_signature.sh`, replace
+  `saulpatino-cbts/Work-Cloud_Network_Azure_Appliance/scripts/ci/verify_image_signature.sh`, replace
   the DSSE `.payload` extraction and base64 decoding with parsing of cosign's direct JSON
   statements, and require their subject digest to match the deployed immutable reference.
 - **Status:** Open — this repository cannot update the sibling appliance in this change.

@@ -20,14 +20,14 @@ on:
           - dev
           - prod
       region:
-        description: AWS region for the state backend and the environment
+        description: "AWS region for the state backend and the environment, e.g. us-east-1 (no default on purpose; see https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html)"
         required: true
-        default: us-east-1
+        default: ""
         type: string
       region_short:
-        description: Short region code used in resource names (e.g. use1)
+        description: "Short lowercase code for your region used in resource names, e.g. use1 for us-east-1 (no default on purpose)"
         required: true
-        default: use1
+        default: ""
         type: string
       tfstate_bucket:
         description: S3 bucket for Terraform state (versioning + SSE-KMS); globally unique
@@ -92,7 +92,21 @@ jobs:
 
       - name: Resolve bootstrap targets
         run: |
-          for PAIR in "region_short=$INPUT_REGION_SHORT" "tfstate_bucket=$INPUT_TFSTATE_BUCKET" "tfstate_lock_table=$INPUT_TFSTATE_LOCK_TABLE"; do
+          # region_short must match the SAME contract the Terraform variable
+          # enforces (^[a-z0-9]{2,8}$). Validating it here means an invalid value
+          # (e.g. "use-1" or "USE1") fails now, before the bucket/lock table are
+          # created, instead of surviving bootstrap and failing a later plan.
+          if ! printf '%s' "$INPUT_REGION_SHORT" | grep -Eq '^[a-z0-9]{2,8}$'; then
+            echo "::error::Input region_short must be 2-8 lowercase letters/digits (e.g. use1) to match the Terraform contract. Got: '$INPUT_REGION_SHORT'."
+            exit 1
+          fi
+          # region: lowercase letters, digits and hyphens (e.g. us-east-1).
+          if ! printf '%s' "$AWS_REGION" | grep -Eq '^[a-z0-9-]{3,}$'; then
+            echo "::error::Input region must be a valid AWS region id of lowercase letters, digits and hyphens (e.g. us-east-1). Got: '$AWS_REGION'."
+            exit 1
+          fi
+          # bucket / lock-table names are looser (AWS naming), but still a single safe token.
+          for PAIR in "tfstate_bucket=$INPUT_TFSTATE_BUCKET" "tfstate_lock_table=$INPUT_TFSTATE_LOCK_TABLE"; do
             if ! printf '%s' "${PAIR#*=}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$'; then
               echo "::error::Input ${PAIR%%=*} must be a single name of letters, digits, '.', '_' or '-'."
               exit 1
