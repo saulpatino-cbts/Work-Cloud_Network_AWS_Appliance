@@ -20,14 +20,14 @@ on:
           - dev
           - prod
       region:
-        description: AWS region for the state backend and the environment
+        description: "AWS region for the state backend and the environment, e.g. us-east-1 (no default on purpose; see https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html)"
         required: true
-        default: us-east-1
+        default: ""
         type: string
       region_short:
-        description: Short region code used in resource names (e.g. use1)
+        description: "Short lowercase code for your region used in resource names, e.g. use1 for us-east-1 (no default on purpose)"
         required: true
-        default: use1
+        default: ""
         type: string
       tfstate_bucket:
         description: S3 bucket for Terraform state (versioning + SSE-KMS); globally unique
