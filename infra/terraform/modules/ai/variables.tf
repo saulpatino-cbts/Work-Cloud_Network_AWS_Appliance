@@ -17,10 +17,18 @@ variable "environment" {
 }
 
 variable "model_ids" {
-  description = "Bedrock foundation model IDs the task role may invoke. The first entry is used as the chat model for the inference profile and provisioned throughput. NOTE: model access must be enabled manually in the Bedrock console per region/account before invocation succeeds."
+  description = "Customer-selected Bedrock foundation model ID or source ARN. A foundation-model ARN or system-defined inference-profile ARN is accepted; the first entry is used as the inference-profile source. Confirm model/profile availability and access for the target Region and account before deployment."
   type        = list(string)
-  default     = ["anthropic.claude-3-5-sonnet-20240620-v1:0"]
   nullable    = false
+
+  validation {
+    condition = length(var.model_ids) > 0 && alltrue([
+      for model_id in var.model_ids :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:-]*$", trimspace(model_id))) ||
+      can(regex("^arn:[a-z0-9-]+:bedrock:[a-z0-9-]+:(|[0-9]{12}|aws):(foundation-model|inference-profile)/[A-Za-z0-9._:/-]+$", trimspace(model_id)))
+    ])
+    error_message = "Provide at least one Bedrock model ID or a Bedrock foundation-model/inference-profile ARN."
+  }
 }
 
 variable "chat_profile_name" {

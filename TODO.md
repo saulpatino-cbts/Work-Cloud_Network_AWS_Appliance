@@ -6,7 +6,7 @@ in the core repository's `TODO.md`; this file covers deployment, operations and 
 Items requiring external input — an approval, an account, a credential, an access grant — belong
 in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
-**Last reviewed:** 2026-09-22
+**Last reviewed:** 2026-11-04
 
 | Phase | Theme | Items |
 |---|---|---|
@@ -102,10 +102,9 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   of the secret — the ARN the identity module outputs as `github_deploy_role_arn`, or the one
   `scripts/Initialize-CnaAwsGitHubSecrets.ps1` creates and stores before the first apply — is
   R-003's, a repository-admin step this repository cannot perform.
-- **Notes for future engineers:** The deploy role's trust `sub` condition is scoped to
-  `repo:<owner>/<repo>:*`. If the workflow is ever moved to a reusable workflow in another
-  repository, that condition must be widened deliberately — it is the only thing preventing
-  another repository from assuming the role.
+- **Notes for future engineers:** The deploy role's trust `sub` condition is scoped to the exact
+  client repository's `dev` or `hub` GitHub environment. Do not widen it to `repo:*`; a reusable
+  workflow or another ref needs an explicit trust design and review.
 
 ### T-105 — Apply the AWS platform root (networking + VPC endpoints)
 
@@ -383,3 +382,23 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   Bash syntax, workflow YAML, documentation-model, and diff checks pass locally. Verification
   against a real published private digest remains unverified; no registry credentials or live
   registry access were used.
+
+### T-115 — Mirror client deployment inputs and BYO allowlist contract
+
+- **Origin:** Client deployment hardening follow-up; AWS runbook and workflow changes.
+- **Priority:** High
+- **Description:** Keep the two appliance deployment contracts aligned for client-owned
+  repositories, per-environment AWS targets/backends, and Core's fail-closed
+  `CNA_BYO_AI_PROVIDERS` runtime contract without conflating the client deploy identity with the
+  upstream image publisher.
+- **Dependencies:** Azure appliance owner and Core contract owner review.
+- **Recommended action:** In Azure, review and mirror the applicable shared workflow/runbook
+  contract: job-scoped environment variables, explicit client target inputs, and BYO provider
+  allowlist validation/wiring. In Core, confirm the provider allowlist contract and key-rotation
+  procedure. Compare the resulting shared files byte-for-byte where identical files are required;
+  do not claim parity before evidence is recorded.
+- **Status:** Open — AWS changes are locally prepared; Azure/Core mirror and contract confirmation
+  are not verified. A conservative distinct-account guard is prepared locally for R-016, but
+  broad IAM remains unverified. Production remains blocked on R-017 (approval bound to the exact
+  applied workload plan). See `README.md` →
+  Client installation and first deployment and `CHANGELOG.md` → Unreleased.

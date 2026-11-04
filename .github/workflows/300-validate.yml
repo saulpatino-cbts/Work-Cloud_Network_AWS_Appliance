@@ -50,6 +50,19 @@ jobs:
           bash -n scripts/ci/verify_image_signature.sh
           bash -n scripts/ci/test_verify_image_signature.sh
           bash scripts/ci/test_verify_image_signature.sh
+      - name: Verify BYO AI configuration regression cases
+        run: |
+          bash -n scripts/ci/resolve_byo_ai_config.sh
+          bash -n scripts/ci/test_resolve_byo_ai_config.sh
+          bash scripts/ci/test_resolve_byo_ai_config.sh
+      - name: Verify AWS environment isolation guards
+        run: |
+          bash -n scripts/ci/assert_distinct_aws_accounts.sh
+          bash -n scripts/ci/test_assert_distinct_aws_accounts.sh
+          bash scripts/ci/test_assert_distinct_aws_accounts.sh
+          bash -n scripts/ci/assert_tfstate_lock_table_isolation.sh
+          bash -n scripts/ci/test_assert_tfstate_lock_table_isolation.sh
+          bash scripts/ci/test_assert_tfstate_lock_table_isolation.sh
 
   terraform:
     name: Terraform fmt + validate

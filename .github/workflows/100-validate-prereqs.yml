@@ -29,6 +29,9 @@ jobs:
     name: Validate prerequisites
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
 
     steps:
       - name: Check required GitHub Secrets
@@ -57,10 +60,11 @@ jobs:
             local name="$1"
             local value="$2"
             local scope="${3:-all workflows}"
-            if [[ -z "$value" ]]; then
+            local normalized="${value,,}"
+            if [[ -z "$value" || "$normalized" == *placeholder* || "$normalized" == *change-me* || "$normalized" == *change_me* || "$normalized" == *replace-me* || "$normalized" == *replace_me* || "$normalized" == "your-secret" ]]; then
               if [[ "$scope" == "all workflows" ]]; then
-                echo "| \`$name\` | $scope | ❌ Missing |" >> "$GITHUB_STEP_SUMMARY"
-                echo "::error::Secret $name is not set"
+                echo "| \`$name\` | $scope | ❌ Missing or placeholder |" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::Secret $name is missing or still contains a placeholder."
                 FAILED=1
               else
                 echo "| \`$name\` | $scope | ⚠️ Not set (optional) |" >> "$GITHUB_STEP_SUMMARY"
@@ -103,8 +107,12 @@ jobs:
           CNA_ENTRA_TENANT_ID:     ${{ vars.CNA_ENTRA_TENANT_ID }}
           CNA_ENTRA_CLIENT_ID:     ${{ vars.CNA_ENTRA_CLIENT_ID }}
           CORE_REPO:               ${{ vars.CORE_REPO }}
+          CORE_OWNER:              ${{ vars.CORE_OWNER }}
           AWS_TARGET_ACCOUNT_ID:   ${{ vars.AWS_TARGET_ACCOUNT_ID }}
           CNA_ALB_CERTIFICATE_ARN: ${{ vars.CNA_ALB_CERTIFICATE_ARN }}
+          CNA_CUSTOM_DOMAIN_NAME:  ${{ vars.CNA_CUSTOM_DOMAIN_NAME }}
+          CNA_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CNA_CLOUDFRONT_CERTIFICATE_ARN }}
+          AWS_REGION:              ${{ vars.AWS_REGION }}
         run: |
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## Variable Check" >> "$GITHUB_STEP_SUMMARY"
@@ -116,19 +124,12 @@ jobs:
           check_var() {
             local name="$1"
             local value="$2"
-            local allow_none="${3:-false}"  # some vars start as 'none' until Terraform creates the resource
-            if [[ -z "$value" ]]; then
-              echo "| \`$name\` | _(empty)_ | ❌ Missing |" >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::Variable $name is not set"
+            if [[ -z "$value" || "${value,,}" == "none" || "${value,,}" == *placeholder* || "${value,,}" == *example.com* || "${value,,}" == *change-me* || "${value,,}" == *replace-me* ]]; then
+              echo "| \`$name\` | — | ❌ Missing or placeholder |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Variable $name is missing or still contains a placeholder."
               FAILED=1
-            elif [[ "$allow_none" == "false" && "$value" == "none" ]]; then
-              echo "| \`$name\` | \`none\` | ⚠️ Placeholder |" >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::Variable $name is still set to 'none' — update after Terraform deploy"
-            elif [[ "$value" == *"PLACEHOLDER"* || "$value" == *"example.com"* ]]; then
-              echo "| \`$name\` | \`$value\` | ⚠️ Placeholder |" >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::Variable $name still has a placeholder value"
             else
-              echo "| \`$name\` | \`$value\` | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$name\` | — | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
             fi
           }
 
@@ -136,9 +137,9 @@ jobs:
             local name="$1"
             local value="$2"
             if [[ -z "$value" || "$value" == "none" ]]; then
-              echo "| \`$name\` | _not configured_ | ℹ️ Optional |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$name\` | — | ℹ️ Optional |" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "| \`$name\` | \`$value\` | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$name\` | — | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
             fi
           }
 
@@ -153,22 +154,41 @@ jobs:
           check_var "CNA_ENTRA_TENANT_ID" "$CNA_ENTRA_TENANT_ID"
           check_var "CNA_ENTRA_CLIENT_ID" "$CNA_ENTRA_CLIENT_ID"
           check_var "CORE_REPO"           "$CORE_REPO"
-
-          # AI/MCP variables are optional and fall back to Terraform defaults at deploy time.
-          check_optional_var "AWS_TARGET_ACCOUNT_ID"   "$AWS_TARGET_ACCOUNT_ID"
-
-          # The ALB certificate is the 502 trap (REVIEW.md R-013 / review AWS-F-02,
-          # AWS-F-15): CloudFront's origin is https-only, so with no certificate
-          # the ALB has no HTTPS listener and EVERY request returns 502. We do not
-          # hard-fail here — a deliberate dev bring-up on the default CloudFront
-          # domain is valid — but the consequence must be loud at preflight, not
-          # discovered as a dead site after a green deploy.
-          if [[ -z "$CNA_ALB_CERTIFICATE_ARN" || "$CNA_ALB_CERTIFICATE_ARN" == "none" ]]; then
-            echo "| \`CNA_ALB_CERTIFICATE_ARN\` | _not configured_ | ⚠️ 502 risk |" >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::CNA_ALB_CERTIFICATE_ARN is not set. CloudFront talks to the ALB over HTTPS only; with no ACM certificate the ALB has no HTTPS listener and every request will return 502 (REVIEW.md R-013). Set the certificate before a customer-facing deploy, or accept a non-serving edge for a topology-only dev bring-up."
-          else
-            echo "| \`CNA_ALB_CERTIFICATE_ARN\` | \`$CNA_ALB_CERTIFICATE_ARN\` | ✅ Set |" >> "$GITHUB_STEP_SUMMARY"
+          check_var "CORE_OWNER"          "$CORE_OWNER"
+          check_var "AWS_TARGET_ACCOUNT_ID" "$AWS_TARGET_ACCOUNT_ID"
+          check_var "CNA_ALB_CERTIFICATE_ARN" "$CNA_ALB_CERTIFICATE_ARN"
+          if [[ ! "$AWS_TARGET_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID must be exactly 12 digits."
+            FAILED=1
           fi
+          if [[ ! "$AWS_REGION" =~ ^[a-z0-9-]{3,}$ || ! "$AWS_REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_REGION and AWS_REGION_SHORT must be configured with valid values."
+            FAILED=1
+          fi
+          if [[ ! "$CORE_OWNER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ || ! "$CORE_REPO" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::CORE_OWNER and CORE_REPO must identify the actual upstream image publisher."
+            FAILED=1
+          fi
+          if [[ "$IMAGE_SIGNING_IDENTITY" != "https://github.com/${CORE_OWNER}/${CORE_REPO}/.github/workflows/200-build-images.yml@refs/heads/main" ]]; then
+            echo "::error::IMAGE_SIGNING_IDENTITY must identify the trusted CORE_OWNER/CORE_REPO 200-build-images workflow on main."
+            FAILED=1
+          fi
+          if [[ ! "$CNA_ENTRA_TENANT_ID" =~ ^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$ || ! "$CNA_ENTRA_CLIENT_ID" =~ ^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$ ]]; then
+            echo "::error::CNA_ENTRA_TENANT_ID and CNA_ENTRA_CLIENT_ID must be UUIDs."
+            FAILED=1
+          fi
+          if [[ ! "$CNA_ALB_CERTIFICATE_ARN" =~ ^arn:[a-z0-9-]+:acm:${AWS_REGION}:${AWS_TARGET_ACCOUNT_ID}:certificate/[0-9a-f-]{36}$ ]]; then
+            echo "::error::CNA_ALB_CERTIFICATE_ARN must be an ACM certificate ARN in AWS_REGION and AWS_TARGET_ACCOUNT_ID."
+            FAILED=1
+          fi
+          if [[ -n "$CNA_CUSTOM_DOMAIN_NAME" || -n "$CNA_CLOUDFRONT_CERTIFICATE_ARN" ]]; then
+            if [[ -z "$CNA_CUSTOM_DOMAIN_NAME" || -z "$CNA_CLOUDFRONT_CERTIFICATE_ARN" || ! "$CNA_CUSTOM_DOMAIN_NAME" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ || ! "$CNA_CLOUDFRONT_CERTIFICATE_ARN" =~ ^arn:[a-z0-9-]+:acm:us-east-1:${AWS_TARGET_ACCOUNT_ID}:certificate/[0-9a-f-]{36}$ ]]; then
+              echo "::error::CNA_CUSTOM_DOMAIN_NAME and CNA_CLOUDFRONT_CERTIFICATE_ARN must be supplied together; the domain must be valid and its certificate must be in us-east-1 and the target account."
+              FAILED=1
+            fi
+          fi
+
+          # Optional BYO-AI/MCP configuration is reported without exposing values.
 
           # CNA_NEXTAUTH_URL is NOT checked here: this job runs with no
           # `environment:` key (it's a repo-level preflight, see the header
@@ -237,6 +257,26 @@ jobs:
           fi
           echo "Docker Hub pull access verified for ${DOCKERHUB_NAMESPACE}/cna ✅"
 
+      - name: Validate AWS target inputs
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
+          ENVIRONMENT: dev
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+        run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID must be set to the exact 12-digit client account ID in this GitHub environment."
+            exit 1
+          fi
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+          if [[ ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
+
       - name: Configure AWS credentials (OIDC)
         id: aws_login
         uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
@@ -267,33 +307,28 @@ jobs:
           echo "| Region | \`$REGION\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Caller | \`$CALLER_ARN\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ -n "$EXPECTED_ACCOUNT_ID" && "$EXPECTED_ACCOUNT_ID" != "none" && "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
             echo "| Expected account ID | \`$EXPECTED_ACCOUNT_ID\` | ❌ Mismatch |" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID"
             exit 1
           fi
 
-          # The deploy role's permissions (the Azure version checks Contributor /
-          # User Access Administrator): the three reader policies the identity
-          # module attaches, plus either the Terraform-managed deploy-write
-          # policy or the bootstrap script's inline copy for the first apply.
+          # The deploy role needs its managed deploy-write policy, or the
+          # temporary inline bootstrap copy before the first Terraform apply.
           ROLE_NAME="${DEPLOY_ROLE_ARN##*/}"
           ATTACHED=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" --query 'AttachedPolicies[].PolicyName' --output text 2>/dev/null || echo "")
           INLINE=$(aws iam list-role-policies --role-name "$ROLE_NAME" --query 'PolicyNames' --output text 2>/dev/null || echo "")
-          for POLICY in ReadOnlyAccess SecurityAudit AWSBillingReadOnlyAccess; do
-            if grep -qw "$POLICY" <<<"$ATTACHED"; then
-              echo "| $POLICY | Attached | ✅ |" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "| $POLICY | ❌ Not attached | |" >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::$POLICY is not attached to $ROLE_NAME — run scripts/Initialize-CnaAwsGitHubSecrets.ps1 or the first 210 apply."
-            fi
-          done
           if grep -q "deploy-write" <<<"$ATTACHED $INLINE"; then
             echo "| Deploy-write policy | Present | ✅ |" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "| Deploy-write policy | ❌ Not found | |" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::No deploy-write policy (managed or inline bootstrap copy) on $ROLE_NAME — Terraform apply will be denied. Run scripts/Initialize-CnaAwsGitHubSecrets.ps1 (REVIEW.md R-003)."
           fi
+          for POLICY in ReadOnlyAccess SecurityAudit AWSBillingReadOnlyAccess; do
+            if grep -qw "$POLICY" <<<"$ATTACHED"; then
+              echo "::warning::Legacy broad policy $POLICY remains attached to $ROLE_NAME; review and remove it through the account's change-control process."
+            fi
+          done
 
           # Verify the state backend is reachable (only after workflow 000 / the bootstrap script has run)
           if [[ -n "$TFSTATE_BUCKET" && "$TFSTATE_BUCKET" != "none" ]]; then

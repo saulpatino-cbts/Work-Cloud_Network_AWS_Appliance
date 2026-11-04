@@ -10,21 +10,20 @@ ensures, idempotently:
 
   1. The GitHub OIDC identity provider (token.actions.githubusercontent.com).
   2. The environment's deploy role, <project>-<env>-<region_short>-github-deploy,
-     with the SAME trust policy the identity module declares (audience
-     sts.amazonaws.com, subject repo:<owner>/<repo>:*), the three assessment
-     reader policies the module attaches (ReadOnlyAccess, SecurityAudit,
-     AWSBillingReadOnlyAccess) and an INLINE bootstrap deploy-write policy that
-     mirrors the module's managed policy so the first Terraform apply can run.
+     with the SAME environment-scoped trust policy the identity module declares
+     (dev environment for dev; protected hub environment for prod) and an INLINE
+     bootstrap deploy-write policy that mirrors the module's managed policy so
+     the first Terraform apply can run.
      Terraform ignores inline policies it does not declare, so the two never
      fight; once the module's managed policy is attached by that first apply,
      re-run with -RemoveBootstrapPolicy to drop the inline copy.
-  3. The Terraform state backend: a versioned, SSE-KMS, public-access-blocked
-     S3 bucket and a DynamoDB lock table with a LockID (S) partition key —
-     the four -backend-config values REVIEW.md R-002 describes.
-  4. The GitHub side: the dev / prod / hub environments, the AWS_DEPLOY_ROLE_ARN
-     secret (environment-scoped, plus repo-scoped if absent so the repo-level
-     workflows 000/100 have one) and the TFSTATE_BUCKET, TFSTATE_LOCK_TABLE,
-     AWS_REGION and AWS_REGION_SHORT repository variables.
+  3. The selected environment's isolated Terraform state backend: a
+     repository-, account-, region- and environment-specific versioned,
+     SSE-KMS, public-access-blocked S3 bucket and DynamoDB lock table.
+  4. The GitHub side: the dev / prod / hub environments, an environment-scoped
+     AWS_DEPLOY_ROLE_ARN secret, AWS_TARGET_ACCOUNT_ID environment variable,
+     and environment-scoped TFSTATE_BUCKET, TFSTATE_LOCK_TABLE, AWS_REGION
+     and AWS_REGION_SHORT variables (prod uses the protected hub environment).
 
 The OIDC provider and the deploy role are ALSO declared by
 infra/terraform/modules/identity. Creating them here first is what lets CI
@@ -37,13 +36,22 @@ cloud-agnostic secrets the README lists (Docker Hub, the Entra sign-in app,
 the runtime secrets of R-008) are entered separately — they are not AWS-side.
 
 .PARAMETER Repo
-GitHub repository in owner/name form. Defaults to the repository `gh` resolves
-from the current directory.
+Required GitHub deployment repository in owner/name form.
 
 .PARAMETER Environment
-Which environment's deploy role to create: dev or prod. Run once per
-environment; the state backend and repository variables are shared and are
-only created on the first run.
+Which environment's deploy role and isolated state backend to create: dev or
+prod. Run once per environment using credentials for that exact account.
+
+.PARAMETER ExpectedAccountId
+Exact 12-digit AWS account ID expected from the active AWS CLI identity.
+
+.PARAMETER OtherEnvironmentAccountId
+Required AWS account ID for the other environment. Dev and prod must use
+distinct accounts; the value is registered as a repository variable.
+
+.PARAMETER OtherEnvironmentLockTable
+Required DynamoDB lock table for the other environment. Dev and prod must use
+distinct lock tables; the value is registered as a repository variable.
 
 .PARAMETER ProjectName
 Terraform var.project_name; first segment of every resource name.
@@ -56,10 +64,11 @@ Short region code used in resource names (Terraform var.region_short).
 
 .PARAMETER TfstateBucket
 S3 bucket for Terraform state. Globally unique; defaults to
-<project>-tfstate-<account-id>-<region_short>.
+<project>-<environment>-tfstate-<account-id>-<region_short>-<repository-hash>.
 
 .PARAMETER TfstateLockTable
-DynamoDB table for state locking. Same default as workflow 000's input.
+DynamoDB table for state locking. Defaults to the same project/environment/
+account/region/repository-specific name as the state bucket.
 
 .PARAMETER AwsProfile
 Named AWS CLI profile to use instead of the default credential chain.
@@ -77,37 +86,47 @@ Where the JSON run report is written (gitignored). No credential value is
 ever included.
 
 .EXAMPLE
-./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Environment dev -Region us-east-1 -RegionShort use1
+./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Repo <owner>/<deployment-repo> -Environment dev -ExpectedAccountId <dev-12-digit-account-id> -OtherEnvironmentAccountId <prod-12-digit-account-id> -OtherEnvironmentLockTable <prod-lock-table> -Region <aws-region> -RegionShort <region-short>
 
 .EXAMPLE
-./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Environment prod -AwsProfile cna-prod -WhatIf
+./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Repo <owner>/<deployment-repo> -Environment prod -ExpectedAccountId <prod-12-digit-account-id> -OtherEnvironmentAccountId <dev-12-digit-account-id> -OtherEnvironmentLockTable <dev-lock-table> -Region <aws-region> -RegionShort <region-short> -AwsProfile client-prod -WhatIf
 
 .EXAMPLE
 # After the first 210 apply has attached the Terraform-managed deploy-write policy:
-./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Environment dev -RemoveBootstrapPolicy
+./scripts/Initialize-CnaAwsGitHubSecrets.ps1 -Repo <owner>/<deployment-repo> -Environment dev -ExpectedAccountId <12-digit-account-id> -Region <aws-region> -RegionShort <region-short> -RemoveBootstrapPolicy
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
+    [Parameter(Mandatory = $true)]
     [string]$Repo,
 
+    [Parameter(Mandatory = $true)]
     [ValidateSet("dev", "prod")]
-    [string]$Environment = "dev",
+    [string]$Environment,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9]{12}$')]
+    [string]$ExpectedAccountId,
+
+    [string]$OtherEnvironmentAccountId = "",
+
+    [string]$OtherEnvironmentLockTable = "",
 
     [string]$ProjectName = "cna",
 
-    # Your AWS region. No default on purpose, so no region is ever assumed for
-    # you. Pass -Region, or leave it blank and the script will ask.
+    # Your AWS region. No default on purpose; pass the exact target region.
     # AWS Regions: https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html
-    [string]$Region = "",
+    [Parameter(Mandatory = $true)]
+    [string]$Region,
 
     # Short lowercase code for your region (e.g. use1 for us-east-1), used in
-    # resource names. No default on purpose. Pass -RegionShort, or leave it blank
-    # and the script will ask.
-    [string]$RegionShort = "",
+    # resource names. No default on purpose.
+    [Parameter(Mandatory = $true)]
+    [string]$RegionShort,
 
     [string]$TfstateBucket = "",
 
-    [string]$TfstateLockTable = "cna-tfstate-lock",
+    [string]$TfstateLockTable = "",
 
     [string]$AwsProfile = "",
 
@@ -206,12 +225,26 @@ function Invoke-Gh {
     return $out
 }
 
+function Get-RegisteredRepositoryVariable {
+    param([string]$RepoName, [string]$VariableName)
+    $query = ".variables[] | select(.name == `"$VariableName`") | .value"
+    $values = @(Invoke-Gh -Arguments @(
+        "api", "--paginate", "repos/$RepoName/actions/variables", "--jq", $query
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($values.Count -gt 1) { throw "Multiple repository variables named $VariableName were returned." }
+    if ($values.Count -eq 0) { return "" }
+    return [string]$values[0]
+}
+
 function Set-GitHubVariable {
-    param([string]$RepoName, [string]$Name, [string]$Value)
-    if ($PSCmdlet.ShouldProcess("$RepoName variable $Name", "set")) {
-        Invoke-Gh -Arguments @("variable", "set", $Name, "--repo", $RepoName, "--body", $Value) | Out-Null
+    param([string]$RepoName, [string]$Name, [string]$Value, [string]$EnvironmentName = "")
+    $target = if ($EnvironmentName) { "$RepoName environment $EnvironmentName variable $Name" } else { "$RepoName variable $Name" }
+    if ($PSCmdlet.ShouldProcess($target, "set")) {
+        $arguments = @("variable", "set", $Name, "--repo", $RepoName, "--body", $Value)
+        if ($EnvironmentName) { $arguments += @("--env", $EnvironmentName) }
+        Invoke-Gh -Arguments $arguments | Out-Null
     }
-    Write-Ok "Variable $Name = $Value"
+    Write-Ok "Variable $Name set ($(if ($EnvironmentName) { "environment $EnvironmentName" } else { 'repository' }))"
 }
 
 function Set-GitHubSecretValue {
@@ -248,31 +281,18 @@ Write-Step "Checking prerequisites"
 Assert-Command aws
 if (-not $SkipGitHub) { Assert-Command gh }
 
-# Region is never assumed for you. If you did not pass -Region / -RegionShort,
-# ask now, before any AWS call uses it. These feed resource names, the S3 state
-# bucket and the AWS_REGION / AWS_REGION_SHORT GitHub variables below.
-#
-# Normalize (trim + lowercase) and validate against the SAME contracts the
-# Terraform variables enforce, so a bad value is caught here -- before any OIDC,
-# role or bucket resource is created -- instead of failing a later plan.
+# Region is explicit. Normalize and validate before any AWS call or resource
+# mutation, so a malformed target fails before the script can create anything.
 #   region       : lowercase letters, digits, hyphens (e.g. us-east-1)
 #   region_short : ^[a-z0-9]{2,8}$ (e.g. use1)  -- mirrors variables.tf
 Write-Step "Choosing your AWS region"
 $Region = $Region.Trim().ToLowerInvariant()
-while ($Region -notmatch '^[a-z0-9-]{3,}$') {
-    if (-not [string]::IsNullOrWhiteSpace($Region)) {
-        Write-Warn "'$Region' is not a valid AWS region id (lowercase letters, digits and hyphens, e.g. us-east-1)."
-    }
-    Write-Info "Pick a region from https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html"
-    $Region = (Read-Host "AWS region (e.g. us-east-1)").Trim().ToLowerInvariant()
+if ($Region -notmatch '^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$') {
+    throw "-Region must be a valid AWS region identifier (for example, us-east-1)."
 }
 $RegionShort = $RegionShort.Trim().ToLowerInvariant()
-while ($RegionShort -notmatch '^[a-z0-9]{2,8}$') {
-    if (-not [string]::IsNullOrWhiteSpace($RegionShort)) {
-        Write-Warn "'$RegionShort' is not a valid short code (2-8 lowercase letters/digits, no hyphens, e.g. use1)."
-    }
-    Write-Info "Pick a short lowercase code for that region; it goes into resource names."
-    $RegionShort = (Read-Host "Short region code (e.g. use1 for us-east-1)").Trim().ToLowerInvariant()
+if ($RegionShort -notmatch '^[a-z0-9]{2,8}$') {
+    throw "-RegionShort must be 2-8 lowercase letters or digits, for example use1."
 }
 Write-Ok "Region: $Region (short code: $RegionShort)"
 
@@ -280,27 +300,70 @@ $identity = Invoke-Aws -Arguments @("sts", "get-caller-identity")
 $accountId = [string]$identity.Account
 $partition = ([string]$identity.Arn).Split(":")[1]
 Write-Ok "AWS account $accountId ($partition), region $Region, caller $($identity.Arn)"
+if ($accountId -ne $ExpectedAccountId) {
+    throw "Authenticated to AWS account $accountId, but -ExpectedAccountId is $ExpectedAccountId. No resources were changed."
+}
 
 if (-not $SkipGitHub) {
-    if ([string]::IsNullOrWhiteSpace($Repo)) {
-        $Repo = (& gh repo view --json nameWithOwner -q .nameWithOwner 2>$null)
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Repo)) {
-            throw "Could not resolve the GitHub repository. Pass -Repo owner/name."
-        }
-        $Repo = $Repo.Trim()
+    if ([string]::IsNullOrWhiteSpace($Repo) -or $Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw "-Repo must explicitly name the GitHub deployment repository in owner/name form."
     }
     Write-Ok "GitHub repository: $Repo"
 } elseif ([string]::IsNullOrWhiteSpace($Repo)) {
     throw "-Repo owner/name is required with -SkipGitHub (it is the OIDC trust subject)."
 }
+if ($Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw "-Repo must name the GitHub deployment repository in owner/name form."
+}
 $repoOwner, $repoName = $Repo.Split("/", 2)
+
+$otherEnvironment = if ($Environment -eq "dev") { "prod" } else { "dev" }
+if ($SkipGitHub) {
+    if ($OtherEnvironmentAccountId -notmatch '^[0-9]{12}$' -or
+        $OtherEnvironmentLockTable -notmatch '^[A-Za-z0-9_.-]{3,255}$') {
+        throw "-SkipGitHub requires valid -OtherEnvironmentAccountId and -OtherEnvironmentLockTable values to enforce environment isolation."
+    }
+} else {
+    if ([string]::IsNullOrWhiteSpace($OtherEnvironmentAccountId)) {
+        $OtherEnvironmentAccountId = Get-RegisteredRepositoryVariable -RepoName $Repo -VariableName "CNA_AWS_TARGET_ACCOUNT_ID_$($otherEnvironment.ToUpperInvariant())"
+    }
+}
+if ($OtherEnvironmentAccountId -notmatch '^[0-9]{12}$') {
+    throw "Provide -OtherEnvironmentAccountId as the other environment's exact 12-digit AWS account ID before creating resources."
+}
+if ($accountId -eq $OtherEnvironmentAccountId) {
+    throw "Dev and prod must use distinct AWS accounts. Refusing to configure $Environment in account $accountId."
+}
+
+$repoHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($Repo.ToLowerInvariant()))).Substring(0, 8).ToLowerInvariant()
 
 $namePrefix = "$ProjectName-$Environment-$RegionShort"
 $deployRoleName = "$namePrefix-github-deploy"
 $bootstrapPolicyName = "$namePrefix-bootstrap-deploy-write"
 $oidcProviderArn = "arn:${partition}:iam::${accountId}:oidc-provider/token.actions.githubusercontent.com"
 if ([string]::IsNullOrWhiteSpace($TfstateBucket)) {
-    $TfstateBucket = "$ProjectName-tfstate-$accountId-$RegionShort"
+    $TfstateBucket = "$ProjectName-$Environment-tfstate-$accountId-$RegionShort-$repoHash"
+}
+if ([string]::IsNullOrWhiteSpace($TfstateLockTable)) {
+    $TfstateLockTable = "$ProjectName-$Environment-tfstate-$accountId-$RegionShort-$repoHash"
+}
+if ($TfstateBucket -notmatch '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$') {
+    throw "TfstateBucket must be a valid 3-63 character S3 bucket name; use an explicit customer-unique name if the generated default is unavailable."
+}
+if ($TfstateLockTable -notmatch '^[A-Za-z0-9_.-]{3,255}$') {
+    throw "TfstateLockTable must be a 3-255 character DynamoDB table name using letters, digits, '.', '_' or '-'."
+}
+$otherLockTableVariable = "CNA_TFSTATE_LOCK_TABLE_$($otherEnvironment.ToUpperInvariant())"
+if (-not $SkipGitHub) {
+    if ([string]::IsNullOrWhiteSpace($OtherEnvironmentLockTable)) {
+        $OtherEnvironmentLockTable = Get-RegisteredRepositoryVariable -RepoName $Repo -VariableName $otherLockTableVariable
+    }
+}
+if ($OtherEnvironmentLockTable -notmatch '^[A-Za-z0-9_.-]{3,255}$') {
+    throw "Provide -OtherEnvironmentLockTable as the other environment's lock-table name before creating resources."
+}
+if ($TfstateLockTable -eq $OtherEnvironmentLockTable) {
+    throw "Dev and prod must use distinct Terraform lock tables. Refusing to configure $Environment with shared table $TfstateLockTable."
 }
 
 # ─── -RemoveBootstrapPolicy: the post-first-apply cleanup, then exit ──────────
@@ -354,8 +417,14 @@ $trustPolicy = [ordered]@{
             Principal = @{ Federated = $oidcProviderArn }
             Action    = "sts:AssumeRoleWithWebIdentity"
             Condition = [ordered]@{
-                StringEquals = @{ "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
-                StringLike   = @{ "token.actions.githubusercontent.com:sub" = "repo:${repoOwner}/${repoName}:*" }
+                StringEquals = @{
+                    "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+                    "token.actions.githubusercontent.com:sub" = $(if ($Environment -eq "prod") {
+                        "repo:${repoOwner}/${repoName}:environment:hub"
+                    } else {
+                        "repo:${repoOwner}/${repoName}:environment:dev"
+                    })
+                }
             }
         }
     )
@@ -384,20 +453,7 @@ try {
     Remove-Item -Path $trustFile -Force -ErrorAction SilentlyContinue
 }
 $deployRoleArn = "arn:${partition}:iam::${accountId}:role/${deployRoleName}"
-
-# The three assessment reader policies the identity module attaches.
-foreach ($policyName in @("ReadOnlyAccess", "SecurityAudit", "AWSBillingReadOnlyAccess")) {
-    $policyArn = "arn:${partition}:iam::aws:policy/$policyName"
-    $attached = Invoke-Aws -Arguments @("iam", "list-attached-role-policies", "--role-name", $deployRoleName)
-    if (@($attached.AttachedPolicies | Where-Object { $_.PolicyArn -eq $policyArn }).Count -gt 0) {
-        Write-Ok "Attached already: $policyName"
-        continue
-    }
-    if ($PSCmdlet.ShouldProcess($deployRoleName, "attach $policyName")) {
-        Invoke-Aws -Arguments @("iam", "attach-role-policy", "--role-name", $deployRoleName, "--policy-arn", $policyArn) -NoOutput | Out-Null
-    }
-    Write-Ok "Attached: $policyName"
-}
+$environmentTagValues = if ($Environment -eq "prod") { @("Prod", "prod") } else { @("Dev", "dev") }
 
 # Inline bootstrap copy of the module's deploy-write policy. Same three
 # statements, plus the services the stack also creates that the module's
@@ -431,25 +487,68 @@ $bootstrapPolicy = [ordered]@{
             Sid      = "InfraManagement"
             Effect   = "Allow"
             Action   = @(
-                "ec2:*", "elasticloadbalancing:*", "rds:*", "s3:*", "secretsmanager:*",
+                "ec2:*", "elasticloadbalancing:*", "rds:*", "secretsmanager:*",
                 "cloudfront:*", "wafv2:*", "logs:*", "iam:*", "kms:*", "cloudwatch:*",
-                "application-autoscaling:*", "bedrock:*", "sns:*", "xray:*"
+                "application-autoscaling:*", "bedrock:*", "sns:*", "xray:*", "tag:GetResources"
             )
             Resource = @("*")
         },
         [ordered]@{
-            Sid      = "TerraformState"
+            Sid      = "DeploymentBuckets"
             Effect   = "Allow"
-            Action   = @(
-                "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket",
-                "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:DescribeTable",
-                "dynamodb:CreateTable", "dynamodb:TagResource"
+            Action   = @("s3:*")
+            Resource = @(
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-artifacts-*",
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-artifacts-*/*",
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-static-*",
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-static-*/*",
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-logs-*",
+                "arn:${partition}:s3:::${ProjectName}-${Environment}-${RegionShort}-logs-*/*"
             )
+        },
+        [ordered]@{
+            Sid      = "StateBucketAdministration"
+            Effect   = "Allow"
+            Action   = @("s3:CreateBucket", "s3:GetBucketLocation", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration", "s3:PutPublicAccessBlock")
+            Resource = @("arn:${partition}:s3:::${TfstateBucket}")
+        },
+        [ordered]@{
+            Sid      = "ListEnvironmentState"
+            Effect   = "Allow"
+            Action   = @("s3:ListBucket", "s3:ListBucketVersions")
+            # The bucket is isolated per client/environment; no prefix
+            # condition so backend HeadBucket probes are not denied.
+            Resource = @("arn:${partition}:s3:::${TfstateBucket}")
+        },
+        [ordered]@{
+            Sid      = "ReadWriteEnvironmentState"
+            Effect   = "Allow"
+            Action   = @("s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion")
+            Resource = @("arn:${partition}:s3:::${TfstateBucket}/${Environment}/*")
+        },
+        [ordered]@{
+            Sid      = "LockTableAdministration"
+            Effect   = "Allow"
+            Action   = @("dynamodb:DescribeTable", "dynamodb:CreateTable", "dynamodb:TagResource")
+            Resource = @("arn:${partition}:dynamodb:${Region}:${accountId}:table/${TfstateLockTable}")
+        },
+        [ordered]@{
+            Sid      = "EnvironmentStateLockItems"
+            Effect   = "Allow"
+            Action   = @("dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem")
+            Resource = @("arn:${partition}:dynamodb:${Region}:${accountId}:table/${TfstateLockTable}")
+            Condition = @{ "ForAllValues:StringLike" = @{ "dynamodb:LeadingKeys" = @("${TfstateBucket}/${Environment}/*") } }
+        },
+        [ordered]@{
+            Sid      = "DeleteEnvironmentStateBackend"
+            Effect   = "Allow"
+            Action   = @("s3:DeleteBucket", "s3:DeleteObject", "s3:DeleteObjectVersion", "dynamodb:DeleteTable")
             Resource = @(
                 "arn:${partition}:s3:::${TfstateBucket}",
-                "arn:${partition}:s3:::${TfstateBucket}/*",
+                "arn:${partition}:s3:::${TfstateBucket}/${Environment}/*",
                 "arn:${partition}:dynamodb:${Region}:${accountId}:table/${TfstateLockTable}"
             )
+            Condition = @{ StringEquals = @{ "aws:PrincipalTag/Environment" = $environmentTagValues } }
         }
     )
 }
@@ -515,27 +614,20 @@ if (-not $SkipGitHub) {
     Write-Step "Recording the backend and deploy role in GitHub ($Repo)"
     foreach ($envName in @("dev", "prod", "hub")) { Confirm-GitHubEnvironment -RepoName $Repo -Name $envName }
 
-    Set-GitHubVariable -RepoName $Repo -Name "TFSTATE_BUCKET" -Value $TfstateBucket
-    Set-GitHubVariable -RepoName $Repo -Name "TFSTATE_LOCK_TABLE" -Value $TfstateLockTable
-    Set-GitHubVariable -RepoName $Repo -Name "AWS_REGION" -Value $Region
-    Set-GitHubVariable -RepoName $Repo -Name "AWS_REGION_SHORT" -Value $RegionShort
-
-    # The environment's own role for its plan/apply jobs; prod's hub approval
-    # gate authenticates under the prod role too, as on Azure.
-    Set-GitHubSecretValue -RepoName $Repo -Name "AWS_DEPLOY_ROLE_ARN" -Value $deployRoleArn -EnvironmentName $Environment
-    if ($Environment -eq "prod") {
-        Set-GitHubSecretValue -RepoName $Repo -Name "AWS_DEPLOY_ROLE_ARN" -Value $deployRoleArn -EnvironmentName "hub"
-    }
-    $repoSecretNames = @()
-    $secretListJson = & gh secret list --repo $Repo --json name 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($secretListJson | Out-String))) {
-        $repoSecretNames = @((($secretListJson | Out-String) | ConvertFrom-Json) | ForEach-Object { $_.name })
-    }
-    if ($repoSecretNames -notcontains "AWS_DEPLOY_ROLE_ARN") {
-        Set-GitHubSecretValue -RepoName $Repo -Name "AWS_DEPLOY_ROLE_ARN" -Value $deployRoleArn
-    } else {
-        Write-Ok "Repository-level AWS_DEPLOY_ROLE_ARN already set (left as is — repo-level jobs keep their current role)"
-    }
+    # All production AWS jobs use hub so its required-reviewer rule protects
+    # plan, apply, teardown and drift access. Never create a repository fallback.
+    $roleEnvironment = if ($Environment -eq "prod") { "hub" } else { "dev" }
+    Set-GitHubSecretValue -RepoName $Repo -Name "AWS_DEPLOY_ROLE_ARN" -Value $deployRoleArn -EnvironmentName $roleEnvironment
+    Set-GitHubVariable -RepoName $Repo -Name "AWS_TARGET_ACCOUNT_ID" -Value $accountId -EnvironmentName $roleEnvironment
+    Set-GitHubVariable -RepoName $Repo -Name "CNA_AWS_TARGET_ACCOUNT_ID_$($Environment.ToUpperInvariant())" -Value $accountId
+    Set-GitHubVariable -RepoName $Repo -Name "CNA_AWS_TARGET_ACCOUNT_ID_$($otherEnvironment.ToUpperInvariant())" -Value $OtherEnvironmentAccountId
+    Set-GitHubVariable -RepoName $Repo -Name "TFSTATE_BUCKET" -Value $TfstateBucket -EnvironmentName $roleEnvironment
+    Set-GitHubVariable -RepoName $Repo -Name "TFSTATE_LOCK_TABLE" -Value $TfstateLockTable -EnvironmentName $roleEnvironment
+    Set-GitHubVariable -RepoName $Repo -Name "CNA_TFSTATE_LOCK_TABLE_$($Environment.ToUpperInvariant())" -Value $TfstateLockTable
+    Set-GitHubVariable -RepoName $Repo -Name $otherLockTableVariable -Value $OtherEnvironmentLockTable
+    Set-GitHubVariable -RepoName $Repo -Name "AWS_REGION" -Value $Region -EnvironmentName $roleEnvironment
+    Set-GitHubVariable -RepoName $Repo -Name "AWS_REGION_SHORT" -Value $RegionShort -EnvironmentName $roleEnvironment
+    Write-Warn "Configure required reviewers and deployment-branch restrictions on the GitHub hub environment manually before any production workflow."
 }
 
 # ─── Hand-off ─────────────────────────────────────────────────────────────────
@@ -545,11 +637,9 @@ Write-Host "  The identity module declares both. Import them into the $Environme
 Write-Host "  state so the first apply adopts them instead of failing on a duplicate create:" -ForegroundColor White
 Write-Host ""
 Write-Host "    cd infra/terraform/environments/$Environment/workload"
+Write-Host "    terraform init -backend-config=`"bucket=$TfstateBucket`" -backend-config=`"dynamodb_table=$TfstateLockTable`" -backend-config=`"region=$Region`" -backend-config=`"encrypt=true`" -backend-config=`"key=$Environment/workload.tfstate`""
 Write-Host "    terraform import module.identity.aws_iam_openid_connect_provider.github $oidcProviderArn"
 Write-Host "    terraform import module.identity.aws_iam_role.github_deploy $deployRoleName"
-Write-Host "    terraform import module.identity.aws_iam_role_policy_attachment.deploy_readonly $deployRoleName/arn:${partition}:iam::aws:policy/ReadOnlyAccess"
-Write-Host "    terraform import module.identity.aws_iam_role_policy_attachment.deploy_security_audit $deployRoleName/arn:${partition}:iam::aws:policy/SecurityAudit"
-Write-Host "    terraform import module.identity.aws_iam_role_policy_attachment.deploy_billing_reader $deployRoleName/arn:${partition}:iam::aws:policy/AWSBillingReadOnlyAccess"
 Write-Host ""
 Write-Host "  After that apply has attached $namePrefix-deploy-write, re-run this script with" -ForegroundColor White
 Write-Host "  -RemoveBootstrapPolicy to drop the inline bootstrap copy." -ForegroundColor White

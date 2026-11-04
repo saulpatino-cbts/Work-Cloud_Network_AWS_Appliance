@@ -28,10 +28,13 @@ locals {
     CNA_APPLIANCE_CLOUD   = "aws"
     CNA_AI_ENGINE_DEFAULT = var.ai_engine_default
   }
+  byo_ai_env_vars = var.ai_mode == "byo-api" ? {
+    CNA_BYO_AI_PROVIDERS = jsonencode(var.byo_ai_providers)
+  } : {}
 
-  # saas-only env. Bedrock Converse accepts a model ARN or an inference-profile
-  # ARN as modelId; the app prefers the profile when present (stable routing,
-  # billed through the profile) and falls back to the model ARN.
+  # saas-only env. The model source is explicitly selected for the target
+  # Region/account; the app prefers the application-profile ARN when present
+  # and falls back to the configured foundation-model or system-profile ARN.
   bedrock_inference_profile_arn = one(module.ai[*].inference_profile_arn)
   bedrock_env_vars = local.ai_saas ? {
     CNA_BEDROCK_MODEL_ID              = one(module.ai[*].chat_model_arn)

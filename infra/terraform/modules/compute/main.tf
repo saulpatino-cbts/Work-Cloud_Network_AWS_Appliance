@@ -264,11 +264,12 @@ resource "aws_vpc_security_group_ingress_rule" "app_to_api" {
 
 # ─── Services ─────────────────────────────────────────────────────────────────
 resource "aws_ecs_service" "api" {
-  name            = local.api_service_name
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.api.arn
-  desired_count   = local.api_desired_count
-  launch_type     = "FARGATE"
+  name                  = local.api_service_name
+  cluster               = aws_ecs_cluster.this.id
+  task_definition       = aws_ecs_task_definition.api.arn
+  desired_count         = local.api_desired_count
+  launch_type           = "FARGATE"
+  wait_for_steady_state = true
 
   network_configuration {
     subnets          = var.app_subnet_ids
@@ -368,7 +369,13 @@ resource "aws_ecs_service" "web" {
     ignore_changes = [desired_count]
   }
 
-  depends_on = [aws_lb_listener.https, aws_vpc_security_group_ingress_rule.app_to_api]
+  # Create web only after the API service has reached steady state so a cold
+  # apply does not start web tasks before the Service Connect API endpoint exists.
+  depends_on = [
+    aws_ecs_service.api,
+    aws_lb_listener.https,
+    aws_vpc_security_group_ingress_rule.app_to_api,
+  ]
 }
 
 # =============================================================================

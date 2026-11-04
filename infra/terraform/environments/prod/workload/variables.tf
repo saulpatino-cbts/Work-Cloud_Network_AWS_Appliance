@@ -41,6 +41,16 @@ variable "github_repository" {
   type        = string
 }
 
+variable "tfstate_bucket_name" {
+  description = "Exact S3 bucket name used by this environment's Terraform backend."
+  type        = string
+}
+
+variable "tfstate_lock_table_name" {
+  description = "Exact DynamoDB lock table name used by this environment's Terraform backend."
+  type        = string
+}
+
 variable "github_token" {
   description = "GitHub token for the github provider."
   type        = string
@@ -256,6 +266,24 @@ variable "ai_mode" {
   }
 }
 
+variable "bedrock_model_id" {
+  description = "Customer-selected Bedrock foundation model ID or source ARN for saas. Use an ID supported for on-demand inference in the target Region, or an exact system-defined inference-profile ARN when that model is profile-only. No model is assumed."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition = var.ai_mode != "saas" || (
+      length(trimspace(var.bedrock_model_id)) > 0 &&
+      (
+        can(regex("^[A-Za-z0-9][A-Za-z0-9._:-]*$", trimspace(var.bedrock_model_id))) ||
+        can(regex("^arn:[a-z0-9-]+:bedrock:[a-z0-9-]+:(|[0-9]{12}|aws):(foundation-model|inference-profile)/[A-Za-z0-9._:/-]+$", trimspace(var.bedrock_model_id)))
+      )
+    )
+    error_message = "For saas, set bedrock_model_id to a customer-selected Bedrock model ID or foundation-model/inference-profile ARN; the appliance has no assumed model default."
+  }
+}
+
 variable "ai_engine_default" {
   description = "Default global GenAI engine when no ai.activeEngine database setting exists. Must match ai_mode: saas on AWS => bedrock; byo-api => anthropic or openai (only consulted as the tie-break when both BYO keys are present)."
   type        = string
@@ -273,6 +301,28 @@ variable "ai_engine_default" {
       : contains(["anthropic", "openai"], var.ai_engine_default)
     )
     error_message = "ai_engine_default is incompatible with ai_mode: saas on AWS requires bedrock; byo-api requires anthropic or openai."
+  }
+}
+
+variable "byo_ai_providers" {
+  description = "Explicit allowlist of BYO AI providers passed as JSON CNA_BYO_AI_PROVIDERS to web and api. Empty by default; byo-api requires a non-empty allowlist containing ai_engine_default."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for provider in var.byo_ai_providers : contains(["anthropic", "openai"], provider)]) && length(distinct(var.byo_ai_providers)) == length(var.byo_ai_providers)
+    error_message = "byo_ai_providers must contain only unique values from anthropic and openai."
+  }
+
+  validation {
+    condition     = var.ai_mode != "byo-api" || length(var.byo_ai_providers) > 0
+    error_message = "byo-api requires an explicit non-empty byo_ai_providers allowlist; configure CNA_BYO_AI_PROVIDERS before planning."
+  }
+
+  validation {
+    condition     = var.ai_mode != "byo-api" || contains(var.byo_ai_providers, var.ai_engine_default)
+    error_message = "For byo-api, byo_ai_providers must include ai_engine_default."
   }
 }
 

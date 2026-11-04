@@ -11,20 +11,22 @@ permissions:
 # Serialize prod drift scans — a manual dispatch shouldn't overlap another
 # in-flight scan against the same prod state.
 concurrency:
-  group: drift-prod
+  group: cna-prod
   cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: true
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
   DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
 
 jobs:
   drift-detection:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: prod
+    environment: hub
+    env:
+      ENVIRONMENT: prod
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
     outputs:
       # "missing-environment" when the state backend or the state itself is
       # gone; "check-failed" for any other failure. Read by report-failure.
@@ -38,20 +40,68 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Validate AWS target inputs
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+        run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$AWS_REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID, AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d  # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Resolve Terraform backend targets
+      - name: Verify target account
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          ALB_CERTIFICATE_ARN: ${{ vars.CNA_ALB_CERTIFICATE_ARN }}
+          CUSTOM_DOMAIN_NAME: ${{ vars.CNA_CUSTOM_DOMAIN_NAME }}
+          CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CNA_CLOUDFRONT_CERTIFICATE_ARN }}
         run: |
-          if [[ -z "${{ vars.TFSTATE_BUCKET }}" || -z "${{ vars.TFSTATE_LOCK_TABLE }}" || -z "$AWS_REGION" || -z "$AWS_REGION_SHORT" ]]; then
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID must be set to the exact 12-digit target account ID in hub."
+            exit 1
+          fi
+          if [[ ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$AWS_REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_REGION and AWS_REGION_SHORT are invalid for prod."
+            exit 1
+          fi
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          if [[ "$ACCOUNT_ID" != "$EXPECTED_ACCOUNT_ID" ]]; then
+            echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID."
+            exit 1
+          fi
+          if [[ ! "$ALB_CERTIFICATE_ARN" =~ ^arn:[a-z0-9-]+:acm:${AWS_REGION}:${ACCOUNT_ID}:certificate/[0-9a-f-]{36}$ ]]; then
+            echo "::error::CNA_ALB_CERTIFICATE_ARN must be an ACM certificate in AWS_REGION and the verified target account."
+            exit 1
+          fi
+          if [[ -n "$CUSTOM_DOMAIN_NAME" || -n "$CLOUDFRONT_CERTIFICATE_ARN" ]]; then
+            if [[ -z "$CUSTOM_DOMAIN_NAME" || -z "$CLOUDFRONT_CERTIFICATE_ARN" || ! "$CUSTOM_DOMAIN_NAME" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ || ! "$CLOUDFRONT_CERTIFICATE_ARN" =~ ^arn:[a-z0-9-]+:acm:us-east-1:${ACCOUNT_ID}:certificate/[0-9a-f-]{36}$ ]]; then
+              echo "::error::CNA_CUSTOM_DOMAIN_NAME and CNA_CLOUDFRONT_CERTIFICATE_ARN must be supplied together with a valid domain and us-east-1 certificate in the target account."
+              exit 1
+            fi
+          fi
+
+      - name: Resolve Terraform backend targets
+        env:
+          VAR_TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
+          VAR_TFSTATE_LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
+        run: |
+          if [[ -z "$VAR_TFSTATE_BUCKET" || -z "$VAR_TFSTATE_LOCK_TABLE" || -z "$AWS_REGION" || -z "$AWS_REGION_SHORT" ]]; then
             echo "::error::TFSTATE_BUCKET, TFSTATE_LOCK_TABLE, AWS_REGION and AWS_REGION_SHORT repository variables are required."
             exit 1
           fi
-          echo "TFSTATE_BUCKET=${{ vars.TFSTATE_BUCKET }}" >> "$GITHUB_ENV"
-          echo "TFSTATE_LOCK_TABLE=${{ vars.TFSTATE_LOCK_TABLE }}" >> "$GITHUB_ENV"
+          echo "TFSTATE_BUCKET=$VAR_TFSTATE_BUCKET" >> "$GITHUB_ENV"
+          echo "TFSTATE_LOCK_TABLE=$VAR_TFSTATE_LOCK_TABLE" >> "$GITHUB_ENV"
 
       # ── Platform state drift ────────────────────────────────────────────────
       - name: Terraform init (platform)
@@ -131,6 +181,23 @@ jobs:
           TF_VAR_dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
           TF_VAR_credential_encryption_key: ${{ secrets.CNA_CREDENTIAL_ENCRYPTION_KEY }}
           TF_VAR_github_token: ""
+          TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
+          TFSTATE_LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
+          ALB_CERTIFICATE_ARN: ${{ vars.CNA_ALB_CERTIFICATE_ARN }}
+          CUSTOM_DOMAIN_NAME: ${{ vars.CNA_CUSTOM_DOMAIN_NAME }}
+          CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CNA_CLOUDFRONT_CERTIFICATE_ARN }}
+          VAR_AI_ENGINE_DEFAULT: ${{ vars.CNA_AI_ENGINE_DEFAULT }}
+          VAR_BYO_AI_PROVIDERS: ${{ vars.CNA_BYO_AI_PROVIDERS }}
+          VAR_AZURE_MCP_ENDPOINT: ${{ vars.CNA_AZURE_MCP_ENDPOINT }}
+          VAR_AZURE_MCP_TRANSPORT: ${{ vars.CNA_AZURE_MCP_TRANSPORT }}
+          VAR_AWS_MCP_ENDPOINT: ${{ vars.CNA_AWS_MCP_ENDPOINT }}
+          VAR_AWS_MCP_TRANSPORT: ${{ vars.CNA_AWS_MCP_TRANSPORT }}
+          VAR_DRAWIO_MCP_URL: ${{ vars.CNA_DRAWIO_MCP_URL }}
+          ENTRA_TENANT_ID: ${{ vars.CNA_ENTRA_TENANT_ID }}
+          ENTRA_CLIENT_ID: ${{ vars.CNA_ENTRA_CLIENT_ID }}
+          NEXTAUTH_URL: ${{ vars.CNA_NEXTAUTH_URL }}
+          GITHUB_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
           if [ -z "$DOCKERHUB_NAMESPACE" ]; then
             echo "::error::DOCKERHUB_NAMESPACE variable is required."
@@ -171,17 +238,15 @@ jobs:
             fi
           done
           AI_MODE=$(catalog_value '.ai_mode' "saas")
-          AI_ENGINE_DEFAULT=$(optional_var "${{ vars.CNA_AI_ENGINE_DEFAULT }}")
-          if [ "$AI_MODE" = "byo-api" ]; then
-            case "$AI_ENGINE_DEFAULT" in anthropic|openai) ;; *) AI_ENGINE_DEFAULT="anthropic" ;; esac
-          else
-            AI_ENGINE_DEFAULT="bedrock"
-          fi
-          AZURE_MCP_ENDPOINT=$(optional_var "${{ vars.CNA_AZURE_MCP_ENDPOINT }}")
-          AZURE_MCP_TRANSPORT=$(optional_var "${{ vars.CNA_AZURE_MCP_TRANSPORT }}")
-          AWS_MCP_ENDPOINT=$(optional_var "${{ vars.CNA_AWS_MCP_ENDPOINT }}")
-          AWS_MCP_TRANSPORT=$(optional_var "${{ vars.CNA_AWS_MCP_TRANSPORT }}")
-          DRAWIO_MCP_URL=$(optional_var "${{ vars.CNA_DRAWIO_MCP_URL }}")
+          source "$GITHUB_WORKSPACE/scripts/ci/resolve_byo_ai_config.sh"
+          resolve_byo_ai_config "$AI_MODE" "$VAR_AI_ENGINE_DEFAULT" "$VAR_BYO_AI_PROVIDERS"
+          AZURE_MCP_ENDPOINT=$(optional_var "$VAR_AZURE_MCP_ENDPOINT")
+          AZURE_MCP_TRANSPORT=$(optional_var "$VAR_AZURE_MCP_TRANSPORT")
+          AWS_MCP_ENDPOINT=$(optional_var "$VAR_AWS_MCP_ENDPOINT")
+          AWS_MCP_TRANSPORT=$(optional_var "$VAR_AWS_MCP_TRANSPORT")
+          DRAWIO_MCP_URL=$(optional_var "$VAR_DRAWIO_MCP_URL")
+          CUSTOM_DOMAIN_NAME=$(optional_var "$CUSTOM_DOMAIN_NAME")
+          CLOUDFRONT_CERTIFICATE_ARN=$(optional_var "$CLOUDFRONT_CERTIFICATE_ARN")
 
           # The AWS workload takes the platform outputs as variables (Azure looks
           # the network up by name), so read them from the platform state.
@@ -192,10 +257,16 @@ jobs:
             echo "::error::Platform state has no vpc_id output — has 210 · Deploy run for prod?"
             exit 1
           fi
+          OPTIONAL_TERRAFORM_ARGS=()
+          if [[ -n "$CLOUDFRONT_CERTIFICATE_ARN" ]]; then
+            OPTIONAL_TERRAFORM_ARGS+=("-var=acm_certificate_arn=$CLOUDFRONT_CERTIFICATE_ARN")
+          fi
 
           terraform plan -detailed-exitcode \
             -var="region=$AWS_REGION" \
             -var="region_short=$AWS_REGION_SHORT" \
+            -var="tfstate_bucket_name=$TFSTATE_BUCKET" \
+            -var="tfstate_lock_table_name=$TFSTATE_LOCK_TABLE" \
             -var="vpc_id=$(tf_out vpc_id)" \
             -var="public_subnet_ids=$(tf_out_json public_subnet_ids)" \
             -var="app_subnet_ids=$(tf_out_json app_subnet_ids)" \
@@ -206,19 +277,23 @@ jobs:
             -var="api_image=${API_IMAGE}" \
             -var="worker_image=${WORKER_IMAGE}" \
             -var="web_image=${WEB_IMAGE}" \
-            -var="entra_tenant_id=${{ vars.CNA_ENTRA_TENANT_ID }}" \
-            -var="entra_client_id=${{ vars.CNA_ENTRA_CLIENT_ID }}" \
-            -var="nextauth_url=${{ vars.CNA_NEXTAUTH_URL }}" \
-            -var="dockerhub_username=${{ vars.DOCKERHUB_NAMESPACE }}" \
+            -var="entra_tenant_id=${ENTRA_TENANT_ID}" \
+            -var="entra_client_id=${ENTRA_CLIENT_ID}" \
+            -var="nextauth_url=${NEXTAUTH_URL}" \
+            -var="dockerhub_username=${DOCKERHUB_NAMESPACE}" \
             -var="ai_mode=${AI_MODE}" \
             -var="ai_engine_default=${AI_ENGINE_DEFAULT}" \
+            -var="byo_ai_providers=${BYO_AI_PROVIDERS_JSON}" \
             -var="azure_mcp_endpoint=${AZURE_MCP_ENDPOINT}" \
             -var="azure_mcp_transport=${AZURE_MCP_TRANSPORT:-streamable-http}" \
             -var="aws_mcp_endpoint=${AWS_MCP_ENDPOINT}" \
             -var="aws_mcp_transport=${AWS_MCP_TRANSPORT:-streamable-http}" \
             -var="drawio_mcp_url=${DRAWIO_MCP_URL}" \
-            -var="github_owner=${{ github.repository_owner }}" \
-            -var="github_repository=${GITHUB_REPOSITORY#*/}" \
+            -var="github_owner=${GITHUB_OWNER}" \
+            -var="github_repository=${GITHUB_REPOSITORY_NAME}" \
+            -var="alb_certificate_arn=${ALB_CERTIFICATE_ARN}" \
+            -var="custom_domain_name=${CUSTOM_DOMAIN_NAME}" \
+            "${OPTIONAL_TERRAFORM_ARGS[@]}" \
             || EXIT=$?
           if [ "${EXIT:-0}" -eq 2 ]; then
             echo "::warning::Drift detected in prod/workload state."

@@ -13,6 +13,11 @@ variable "tags" {
 variable "environment" {
   description = "Deployment environment (dev or prod)"
   type        = string
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be dev or prod."
+  }
 }
 
 variable "project_name" {
@@ -41,6 +46,16 @@ variable "github_repository" {
   type        = string
 }
 
+variable "tfstate_bucket_name" {
+  description = "Exact S3 bucket name used by this environment's Terraform backend."
+  type        = string
+}
+
+variable "tfstate_lock_table_name" {
+  description = "Exact DynamoDB lock table name used by this environment's Terraform backend."
+  type        = string
+}
+
 variable "task_bedrock_policy_json" {
   description = "Optional IAM policy JSON (produced by the ai module) granting the ECS task role Bedrock InvokeModel access. When null, no Bedrock policy is attached to the task role."
   type        = string
@@ -51,18 +66,4 @@ variable "enable_xray" {
   description = "Attach X-Ray write permissions to the ECS task role. Mirrors Azure Application Insights auto-instrumentation."
   type        = bool
   default     = true
-}
-
-# ─── OIDC deploy-role trust scoping (review AWS-F-03 / REVIEW.md R-011) ────────
-variable "default_branch" {
-  description = "Default branch whose GitHub Actions runs may assume the deploy role (e.g. main). Used to scope the OIDC trust subject away from any-branch."
-  type        = string
-  default     = "main"
-}
-
-variable "deploy_trusted_subjects" {
-  description = "Override the OIDC trust subjects for the deploy role. Empty (default) scopes trust to the default branch plus the dev/prod/hub environments. Set explicitly (e.g. for a reusable workflow in another repo) — never widen to a blanket 'repo:owner/repo:*'."
-  type        = list(string)
-  default     = []
-  nullable    = false
 }
