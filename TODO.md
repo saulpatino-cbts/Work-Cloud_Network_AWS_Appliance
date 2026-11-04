@@ -362,22 +362,24 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   `environment` map the Azure roots do (the web tier's — the Azure roots do not pass them to api
   or worker either), and surface them in `210-deploy` exactly as Azure's `210` does. Cloud-specific
   file bodies only; no shared-file change.
-- **Status:** Done 2026-09-23 for the Terraform (`CHANGELOG.md` → Unreleased, Added). The
-  `210-deploy` half waits on T-101: the workflow is still a scaffold with no `terraform plan`
-  step to add the `-var` lines to — T-101 must pass `azure_mcp_endpoint`, `azure_mcp_transport`,
-  `aws_mcp_endpoint`, `aws_mcp_transport` and `drawio_mcp_url` from the `CNA_*` repository
-  variables the way Azure's `210` does.
+- **Status:** Done 2026-09-23 for Terraform and completed with T-101: both workload plan paths in
+  `210-deploy` now pass `azure_mcp_endpoint`, `azure_mcp_transport`, `aws_mcp_endpoint`,
+  `aws_mcp_transport` and `drawio_mcp_url` from the matching `CNA_*` repository variables.
 
-### T-114 — Mirror the cosign attestation parsing fix in the Azure appliance
+### T-114 — Support cosign attestation envelope and statement output
 
-- **Origin:** PR #16 review, 2026-10-03.
+- **Origin:** PR #16 review, 2026-10-03; core TODO T-723's observed cosign v3.1.3 output,
+  2026-10-26.
 - **Priority:** High
-- **Description:** The shared `scripts/ci/verify_image_signature.sh` now reads the in-toto
-  statements that cosign prints directly as JSON. The Azure sibling still needs the same fix so
-  both appliances can verify valid provenance attestations.
+- **Description:** cosign v3.1.3 can emit provenance as a DSSE envelope whose base64 `.payload`
+  contains the in-toto statement, as well as a direct statement; verification must support both
+  encodings without weakening the deployed-image subject digest or trusted builder checks.
 - **Dependencies:** None.
-- **Recommended action:** In
-  `saulpatino-cbts/Work-Cloud_Network_Azure_Appliance/scripts/ci/verify_image_signature.sh`, replace
-  the DSSE `.payload` extraction and base64 decoding with parsing of cosign's direct JSON
-  statements, and require their subject digest to match the deployed immutable reference.
-- **Status:** Open — this repository cannot update the sibling appliance in this change.
+- **Recommended action:** Normalize cosign JSONL/array output containing DSSE envelopes or direct
+  SLSA v0.2 statements; reject malformed and unsupported shapes and require exact subject digest
+  and core builder-prefix matches.
+- **Status:** AWS parser and offline regression suite implemented; verifier and test script now
+  match the Azure worktree byte-for-byte (SHA-256 confirmed). The mocked cosign regression suite,
+  Bash syntax, workflow YAML, documentation-model, and diff checks pass locally. Verification
+  against a real published private digest remains unverified; no registry credentials or live
+  registry access were used.

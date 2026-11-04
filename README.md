@@ -112,13 +112,15 @@ Every operation is a workflow run from the **Actions → Run workflow** dialog, 
    The four image inputs (`api_image`, `worker_image`, `web_image`, `migrator_image`) are pinned
    references — `docker.io/<ns>/cna:<role>-sha-<7>@sha256:<digest>` — supplied by `230 · Image
    Update`, or copied from the core's `.deployment-catalog/latest-build.json` (`images.<role>` +
-   `digests.<role>`) or from the `update-available` issue. Floating tags (`*-latest`) are refused;
-   a tag-only reference is accepted with a warning. `prod` applies run under the `hub` environment
-   and wait for its required reviewers.
+   `digests.<role>`) or from the `update-available` issue. Floating tags (`*-latest`) and tag-only
+   references are refused. `prod` applies run under the `hub` environment and wait for its required
+   reviewers.
 
    Before the plan, `210` verifies every image's cosign signature and SLSA provenance against
    `IMAGE_SIGNING_IDENTITY` (the core's `200-build-images` identity); `220` does the same for each
-   image it rolls. An image the core did not build and sign is refused, whatever its tag says.
+   image it rolls. The verifier accepts cosign's direct statement and DSSE-envelope output while
+   enforcing the same image-digest and trusted-builder checks. An image the core did not build and
+   sign is refused, whatever its tag says.
 
 Flipping `ai_mode` on a live environment destroys or creates the cloud AI resources — record the
 decision in `REVIEW.md` first.
