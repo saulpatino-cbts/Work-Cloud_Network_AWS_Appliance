@@ -6,7 +6,7 @@ in the core repository's `TODO.md`; this file covers deployment, operations and 
 Items requiring external input — an approval, an account, a credential, an access grant — belong
 in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
-**Last reviewed:** 2026-09-22
+**Last reviewed:** 2026-11-04
 
 | Phase | Theme | Items |
 |---|---|---|
@@ -102,10 +102,9 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   of the secret — the ARN the identity module outputs as `github_deploy_role_arn`, or the one
   `scripts/Initialize-CnaAwsGitHubSecrets.ps1` creates and stores before the first apply — is
   R-003's, a repository-admin step this repository cannot perform.
-- **Notes for future engineers:** The deploy role's trust `sub` condition is scoped to
-  `repo:<owner>/<repo>:*`. If the workflow is ever moved to a reusable workflow in another
-  repository, that condition must be widened deliberately — it is the only thing preventing
-  another repository from assuming the role.
+- **Notes for future engineers:** The deploy role's trust `sub` condition is scoped to the exact
+  client repository's `dev` or `hub` GitHub environment. Do not widen it to `repo:*`; a reusable
+  workflow or another ref needs an explicit trust design and review.
 
 ### T-105 — Apply the AWS platform root (networking + VPC endpoints)
 
@@ -362,22 +361,44 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   `environment` map the Azure roots do (the web tier's — the Azure roots do not pass them to api
   or worker either), and surface them in `210-deploy` exactly as Azure's `210` does. Cloud-specific
   file bodies only; no shared-file change.
-- **Status:** Done 2026-09-23 for the Terraform (`CHANGELOG.md` → Unreleased, Added). The
-  `210-deploy` half waits on T-101: the workflow is still a scaffold with no `terraform plan`
-  step to add the `-var` lines to — T-101 must pass `azure_mcp_endpoint`, `azure_mcp_transport`,
-  `aws_mcp_endpoint`, `aws_mcp_transport` and `drawio_mcp_url` from the `CNA_*` repository
-  variables the way Azure's `210` does.
+- **Status:** Done 2026-09-23 for Terraform and completed with T-101: both workload plan paths in
+  `210-deploy` now pass `azure_mcp_endpoint`, `azure_mcp_transport`, `aws_mcp_endpoint`,
+  `aws_mcp_transport` and `drawio_mcp_url` from the matching `CNA_*` repository variables.
 
-### T-114 — Mirror the cosign attestation parsing fix in the Azure appliance
+### T-114 — Support cosign attestation envelope and statement output
 
-- **Origin:** PR #16 review, 2026-10-03.
+- **Origin:** PR #16 review, 2026-10-03; core TODO T-723's observed cosign v3.1.3 output,
+  2026-10-26.
 - **Priority:** High
-- **Description:** The shared `scripts/ci/verify_image_signature.sh` now reads the in-toto
-  statements that cosign prints directly as JSON. The Azure sibling still needs the same fix so
-  both appliances can verify valid provenance attestations.
+- **Description:** cosign v3.1.3 can emit provenance as a DSSE envelope whose base64 `.payload`
+  contains the in-toto statement, as well as a direct statement; verification must support both
+  encodings without weakening the deployed-image subject digest or trusted builder checks.
 - **Dependencies:** None.
-- **Recommended action:** In
-  `saulpatino-cbts/Work-Cloud_Network_Azure_Appliance/scripts/ci/verify_image_signature.sh`, replace
-  the DSSE `.payload` extraction and base64 decoding with parsing of cosign's direct JSON
-  statements, and require their subject digest to match the deployed immutable reference.
-- **Status:** Open — this repository cannot update the sibling appliance in this change.
+- **Recommended action:** Normalize cosign JSONL/array output containing DSSE envelopes or direct
+  SLSA v0.2 statements; reject malformed and unsupported shapes and require exact subject digest
+  and core builder-prefix matches.
+- **Status:** AWS parser and offline regression suite implemented; verifier and test script now
+  match the Azure worktree byte-for-byte (SHA-256 confirmed). The mocked cosign regression suite,
+  Bash syntax, workflow YAML, documentation-model, and diff checks pass locally. Verification
+  against a real published private digest remains unverified; no registry credentials or live
+  registry access were used.
+
+### T-115 — Mirror client deployment inputs and BYO allowlist contract
+
+- **Origin:** Client deployment hardening follow-up; AWS runbook and workflow changes.
+- **Priority:** High
+- **Description:** Keep the two appliance deployment contracts aligned for client-owned
+  repositories, per-environment AWS targets/backends, and Core's fail-closed
+  `CNA_BYO_AI_PROVIDERS` runtime contract without conflating the client deploy identity with the
+  upstream image publisher.
+- **Dependencies:** Azure appliance owner and Core contract owner review.
+- **Recommended action:** In Azure, review and mirror the applicable shared workflow/runbook
+  contract: job-scoped environment variables, explicit client target inputs, and BYO provider
+  allowlist validation/wiring. In Core, confirm the provider allowlist contract and key-rotation
+  procedure. Compare the resulting shared files byte-for-byte where identical files are required;
+  do not claim parity before evidence is recorded.
+- **Status:** Open — AWS changes are locally prepared; Azure/Core mirror and contract confirmation
+  are not verified. A conservative distinct-account guard is prepared locally for R-016, but
+  broad IAM remains unverified. Production remains blocked on R-017 (approval bound to the exact
+  applied workload plan). See `README.md` →
+  Client installation and first deployment and `CHANGELOG.md` → Unreleased.

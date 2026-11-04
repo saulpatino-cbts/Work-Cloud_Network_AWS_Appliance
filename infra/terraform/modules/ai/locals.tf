@@ -1,14 +1,15 @@
 locals {
-  # Region is embedded in the foundation-model ARN; account is omitted because
-  # foundation models are AWS-owned (arn:...:bedrock:<region>::foundation-model/<id>).
-  foundation_model_arns = [
+  # Foundation model IDs are regional; explicit Bedrock ARNs may also identify
+  # system-defined inference profiles for models served only through a profile.
+  model_source_arns = [
     for m in var.model_ids :
-    "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.name}::foundation-model/${m}"
+    startswith(trimspace(m), "arn:")
+    ? trimspace(m)
+    : "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.name}::foundation-model/${trimspace(m)}"
   ]
 
-  # The primary chat model ARN (first in the list) — used by inference profile
-  # and provisioned throughput resources.
-  chat_model_arn = local.foundation_model_arns[0]
+  # The primary model/profile source (first in the list) for the application profile.
+  chat_model_arn = local.model_source_arns[0]
 
   # Inference profile name follows the Azure deployment naming convention:
   # a stable, human-readable name the app references.
@@ -25,7 +26,7 @@ locals {
   ] : []
 
   all_invocable_arns = concat(
-    local.foundation_model_arns,
+    local.model_source_arns,
     local.provisioned_arns,
     local.inference_profile_arns,
   )

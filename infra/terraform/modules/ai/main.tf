@@ -2,7 +2,8 @@
 # AI — Bedrock model management + invoke permissions. Mirrors the Azure ai
 # module (AI Foundry account + chat model deployment). This module:
 #   1. Creates an IAM policy document for bedrock:InvokeModel (consumed by identity)
-#   2. Optionally provisions a Bedrock inference profile for deterministic routing
+#   2. Optionally provisions an application inference profile from the
+#      customer-selected model or system-defined inference-profile source
 #   3. Optionally provisions on-demand throughput for the chat model
 #   4. Optionally creates a Bedrock guardrail for content filtering
 #
@@ -45,17 +46,15 @@ data "aws_iam_policy_document" "bedrock_invoke" {
   }
 }
 
-# ─── Inference Profile (mirrors Azure's cognitive_deployment) ─────────────────
-# An application inference profile provides a stable, named endpoint that can
-# route to one or more foundation models — analogous to Azure's deployment name
-# (e.g. "gpt-chat-latest") which the app references via AZURE_OPENAI_DEPLOYMENT.
-# The app references this profile by ARN/ID rather than a raw model ID, enabling
-# model version rotation without app config changes.
+# ─── Application Inference Profile ────────────────────────────────────────────
+# AWS supports creating an application profile from a foundation model that
+# supports on-demand inference in this Region, or a system-defined profile when
+# the model is served only through a profile. The app prefers this profile ARN.
 resource "aws_bedrock_inference_profile" "chat" {
   count = var.enable_inference_profile ? 1 : 0
 
   name        = local.inference_profile_name
-  description = "CNA ${var.environment} chat inference profile — mirrors Azure AI Foundry gpt-chat-latest deployment"
+  description = "CNA ${var.environment} application inference profile"
   # `type` is read-only on this resource: a profile you create is APPLICATION
   # by definition (SYSTEM_DEFINED profiles are AWS-managed and only referenced).
 

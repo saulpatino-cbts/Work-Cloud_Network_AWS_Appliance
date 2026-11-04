@@ -5,7 +5,7 @@ name: "230 · Image Update"
 # Fast path: the core's 200-build-images.yml sends a repository_dispatch
 # (`cna-image-published`, payload = latest-build.json) after every build.
 # Safety net: every six hours this workflow fetches the same manifest from the
-# core repository (vars.CORE_REPO) through the GitHub App, so a missed
+# core repository (vars.CORE_OWNER / vars.CORE_REPO) through the GitHub App, so a missed
 # dispatch — or an image set built anywhere else that updates the manifest —
 # is still picked up.
 #
@@ -77,24 +77,24 @@ jobs:
         with:
           client-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          owner: ${{ vars.CORE_OWNER }}
           repositories: ${{ vars.CORE_REPO }}
 
       - name: Fetch the manifest from the core repository
         if: github.event_name != 'repository_dispatch'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CORE_OWNER: ${{ vars.CORE_OWNER }}
           CORE_REPO: ${{ vars.CORE_REPO }}
-          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          if [ -z "$CORE_REPO" ]; then
-            echo "::error::CORE_REPO variable is required (the core repository name under ${OWNER})."
+          if [ -z "$CORE_OWNER" ] || [ -z "$CORE_REPO" ]; then
+            echo "::error::CORE_OWNER and CORE_REPO variables are required for the trusted upstream publisher."
             exit 1
           fi
           curl -sSf -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${OWNER}/${CORE_REPO}/contents/.deployment-catalog/latest-build.json?ref=main" \
+            "https://api.github.com/repos/${CORE_OWNER}/${CORE_REPO}/contents/.deployment-catalog/latest-build.json?ref=main" \
             -o /tmp/latest-build.json
           echo "source=poll" >> "$GITHUB_ENV"
 
@@ -106,13 +106,24 @@ jobs:
       - name: Compare against the release catalog
         id: compare
         env:
-          OWNER: ${{ github.repository_owner }}
+          CORE_OWNER: ${{ vars.CORE_OWNER }}
           CORE_REPO: ${{ vars.CORE_REPO }}
+          IMAGE_SIGNING_IDENTITY: ${{ vars.IMAGE_SIGNING_IDENTITY }}
           DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           M=/tmp/latest-build.json
+          if ! printf '%s' "$CORE_OWNER" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$' ||
+             ! printf '%s' "$CORE_REPO" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+            echo "::error::CORE_OWNER and CORE_REPO must identify the actual upstream image publisher."
+            exit 1
+          fi
+          EXPECTED_IDENTITY="https://github.com/${CORE_OWNER}/${CORE_REPO}/.github/workflows/200-build-images.yml@refs/heads/main"
+          if [[ "$IMAGE_SIGNING_IDENTITY" != "$EXPECTED_IDENTITY" ]]; then
+            echo "::error::IMAGE_SIGNING_IDENTITY must match the configured upstream publisher's 200-build-images workflow."
+            exit 1
+          fi
           jq -e '.sha_tag and .images.api and .images.worker and .images.web' "$M" >/dev/null \
             || { echo "::error::Manifest is missing sha_tag or image references."; cat "$M"; exit 1; }
 
@@ -173,7 +184,7 @@ jobs:
             echo "worker_image=${WORKER_IMAGE}"
             echo "web_image=${WEB_IMAGE}"
             echo "migrator_image=${MIGRATOR_IMAGE}"
-            echo "source_repo=${OWNER}/${CORE_REPO:-unknown}"
+            echo "source_repo=${CORE_OWNER}/${CORE_REPO:-unknown}"
             echo "source_run_id=$(jq -r '.run_id // ""' "$M")"
           } >> "$GITHUB_OUTPUT"
 

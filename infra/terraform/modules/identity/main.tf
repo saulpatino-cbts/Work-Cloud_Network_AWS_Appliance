@@ -220,23 +220,6 @@ resource "aws_iam_role" "github_deploy" {
   tags = merge(var.tags, { Name = local.deploy_role_name })
 }
 
-# Assessment reader roles (parity with Azure Global Reader + Security Reader +
-# Billing Reader).
-resource "aws_iam_role_policy_attachment" "deploy_readonly" {
-  role       = aws_iam_role.github_deploy.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/ReadOnlyAccess"
-}
-
-resource "aws_iam_role_policy_attachment" "deploy_security_audit" {
-  role       = aws_iam_role.github_deploy.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/SecurityAudit"
-}
-
-resource "aws_iam_role_policy_attachment" "deploy_billing_reader" {
-  role       = aws_iam_role.github_deploy.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AWSBillingReadOnlyAccess"
-}
-
 # Deploy write permissions — ECS is scoped to Project-tagged resources; the
 # broader infra actions are required for a full Terraform apply of this stack.
 #
@@ -292,7 +275,6 @@ resource "aws_iam_policy" "deploy_write" {
           "ec2:*",
           "elasticloadbalancing:*",
           "rds:*",
-          "s3:*",
           "secretsmanager:*",
           "cloudfront:*",
           "wafv2:*",
@@ -319,28 +301,70 @@ resource "aws_iam_policy" "deploy_write" {
           "bedrock:*",
           "sns:*",
           "xray:*",
+          "tag:GetResources",
         ]
         Resource = ["*"]
       },
       {
-        Sid    = "TerraformState"
+        Sid    = "DeploymentBuckets"
         Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket",
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:DeleteItem",
-          # 000-bootstrap-backend verifies and (re)creates the lock table under
-          # this role. DeleteTable is deliberately absent: the table outlives
-          # every environment and is removed by an account admin, never by CI.
-          "dynamodb:DescribeTable",
-          "dynamodb:CreateTable",
-          "dynamodb:TagResource",
+        Action = ["s3:*"]
+        Resource = [
+          local.artifacts_bucket_arn,
+          local.artifacts_objects_arn,
+          local.static_bucket_arn,
+          local.static_objects_arn,
+          local.logs_bucket_arn,
+          local.logs_objects_arn,
         ]
-        Resource = ["*"]
+      },
+      {
+        Sid      = "StateBucketAdministration"
+        Effect   = "Allow"
+        Action   = ["s3:CreateBucket", "s3:GetBucketLocation", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration", "s3:PutPublicAccessBlock"]
+        Resource = [local.state_bucket_arn]
+      },
+      {
+        Sid    = "ListEnvironmentState"
+        Effect = "Allow"
+        Action = ["s3:ListBucket", "s3:ListBucketVersions"]
+        # This bucket is isolated per client/environment; no s3:prefix
+        # condition so backend HeadBucket probes are not denied.
+        Resource = [local.state_bucket_arn]
+      },
+      {
+        Sid      = "ReadWriteEnvironmentState"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+        Resource = [local.state_objects_arn]
+      },
+      {
+        Sid      = "LockTableAdministration"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeTable", "dynamodb:CreateTable", "dynamodb:TagResource"]
+        Resource = [local.state_lock_arn]
+      },
+      {
+        Sid      = "EnvironmentStateLockItems"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = [local.state_lock_arn]
+        Condition = {
+          "ForAllValues:StringLike" = {
+            "dynamodb:LeadingKeys" = ["${local.state_lock_key_prefix}*"]
+          }
+        }
+      },
+      {
+        Sid      = "DeleteEnvironmentStateBackend"
+        Effect   = "Allow"
+        Action   = ["s3:DeleteBucket", "s3:DeleteObject", "s3:DeleteObjectVersion", "dynamodb:DeleteTable"]
+        Resource = [local.state_bucket_arn, local.state_objects_arn, local.state_lock_arn]
+        Condition = {
+          StringEquals = {
+            "aws:PrincipalTag/Environment" = var.environment == "prod" ? ["Prod", "prod"] : ["Dev", "dev"]
+          }
+        }
       },
     ]
   })

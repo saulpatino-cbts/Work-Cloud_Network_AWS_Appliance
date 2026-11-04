@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       destroy_tfstate_backend:
-        description: Also destroy the Terraform state backend (bucket + lock table)
+        description: Also destroy this environment's isolated Terraform state backend (bucket + lock table)
         required: false
         default: "false"
         type: choice
@@ -42,14 +42,13 @@ permissions:
 
 env:
   TF_IN_AUTOMATION: true
-  AWS_REGION: ${{ vars.AWS_REGION }}
   DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
   # Inputs reach the shell only through env, never expanded into a script.
   ENVIRONMENT: ${{ github.event.inputs.environment }}
 
 # Same group as 210 so a teardown never overlaps a deploy of the same environment.
 concurrency:
-  group: deploy-${{ github.event.inputs.environment }}
+  group: cna-${{ github.event.inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -92,6 +91,9 @@ jobs:
     timeout-minutes: 90
     needs: preflight
     environment: ${{ github.event.inputs.environment == 'prod' && 'hub' || github.event.inputs.environment }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
     outputs:
       name_prefix: ${{ steps.names.outputs.name_prefix }}
 
@@ -102,6 +104,16 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Validate distinct client environment accounts
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+        run: |
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+
       - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -110,10 +122,15 @@ jobs:
       - name: Verify target account
         env:
           EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
         run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID, AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo "Account $ACCOUNT_ID ($AWS_REGION)"
-          if [[ -n "$EXPECTED_ACCOUNT_ID" && "$EXPECTED_ACCOUNT_ID" != "none" && "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
+          if [[ "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
             echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID"
             exit 1
           fi
@@ -250,6 +267,7 @@ jobs:
           TF_VAR_credential_encryption_key: ${{ secrets.CNA_CREDENTIAL_ENCRYPTION_KEY }}
           TF_VAR_github_token: ${{ steps.app-token.outputs.token }}
           VAR_AI_ENGINE_DEFAULT: ${{ vars.CNA_AI_ENGINE_DEFAULT }}
+          VAR_BYO_AI_PROVIDERS: ${{ vars.CNA_BYO_AI_PROVIDERS }}
           ENTRA_TENANT_ID: ${{ vars.CNA_ENTRA_TENANT_ID }}
           ENTRA_CLIENT_ID: ${{ vars.CNA_ENTRA_CLIENT_ID }}
           NEXTAUTH_URL: ${{ vars.CNA_NEXTAUTH_URL }}
@@ -277,12 +295,8 @@ jobs:
           WORKER_IMAGE=$(catalog_value '.worker_image' "docker.io/${DOCKERHUB_NAMESPACE}/cna:worker-latest")
           WEB_IMAGE=$(catalog_value '.web_image' "docker.io/${DOCKERHUB_NAMESPACE}/cna:web-latest")
           AI_MODE=$(catalog_value '.ai_mode' "saas")
-          AI_ENGINE_DEFAULT=$(optional_var "$VAR_AI_ENGINE_DEFAULT")
-          if [ "$AI_MODE" = "byo-api" ]; then
-            case "$AI_ENGINE_DEFAULT" in anthropic|openai) ;; *) AI_ENGINE_DEFAULT="anthropic" ;; esac
-          else
-            AI_ENGINE_DEFAULT="bedrock"
-          fi
+          source "$GITHUB_WORKSPACE/scripts/ci/resolve_byo_ai_config.sh"
+          resolve_byo_ai_config "$AI_MODE" "$VAR_AI_ENGINE_DEFAULT" "$VAR_BYO_AI_PROVIDERS"
           PLATFORM_OUT=$(terraform -chdir=../platform output -json 2>/dev/null || echo '{}')
           tf_out() { echo "$PLATFORM_OUT" | jq -r --arg k "$1" '.[$k].value // empty'; }
           tf_out_json() { echo "$PLATFORM_OUT" | jq -c --arg k "$1" '.[$k].value // []'; }
@@ -292,6 +306,8 @@ jobs:
           terraform destroy -auto-approve \
             -var="region=$AWS_REGION" \
             -var="region_short=$AWS_REGION_SHORT" \
+            -var="tfstate_bucket_name=$TFSTATE_BUCKET" \
+            -var="tfstate_lock_table_name=$TFSTATE_LOCK_TABLE" \
             -var="vpc_id=$(tf_out vpc_id)" \
             -var="public_subnet_ids=$(tf_out_json public_subnet_ids)" \
             -var="app_subnet_ids=$(tf_out_json app_subnet_ids)" \
@@ -308,6 +324,7 @@ jobs:
             -var="dockerhub_username=${DOCKERHUB_NAMESPACE}" \
             -var="ai_mode=${AI_MODE}" \
             -var="ai_engine_default=${AI_ENGINE_DEFAULT}" \
+            -var="byo_ai_providers=${BYO_AI_PROVIDERS_JSON}" \
             -var="github_owner=${GITHUB_OWNER}" \
             -var="github_repository=${GITHUB_REPOSITORY#*/}" \
             -var="db_deletion_protection=false" \
@@ -354,16 +371,46 @@ jobs:
     timeout-minutes: 30
     needs: terraform-destroy
     environment: ${{ github.event.inputs.environment == 'prod' && 'hub' || github.event.inputs.environment }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
     # Non-blocking: a best-effort sweep for anything tagged to this environment
     # that survived the destroy (a task definition 220 registered, a log group
     # a task created, a secret still in its recovery window). A failure here
     # must not fail the teardown — the real destruction already happened.
     continue-on-error: true
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate distinct client environment accounts
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+        run: |
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+
       - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify target account
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
+        run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID, AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          if [[ "$ACCOUNT_ID" != "$EXPECTED_ACCOUNT_ID" ]]; then
+            echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID."
+            exit 1
+          fi
 
       # Everything Terraform creates carries Project=cna and Environment=<Env>
       # (provider default_tags; the value is title-cased in the roots' locals),
@@ -422,14 +469,44 @@ jobs:
     timeout-minutes: 10
     needs: terraform-destroy
     environment: ${{ github.event.inputs.environment == 'prod' && 'hub' || github.event.inputs.environment }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
     # Best-effort: a skipped purge just means the next deploy 400s and someone
     # runs `aws secretsmanager delete-secret --force-delete-without-recovery` by hand.
     continue-on-error: true
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate distinct client environment accounts
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+        run: |
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+
       - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify target account
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
+        run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID, AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          if [[ "$ACCOUNT_ID" != "$EXPECTED_ACCOUNT_ID" ]]; then
+            echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID."
+            exit 1
+          fi
 
       - name: Force-delete secrets under the environment prefix
         env:
@@ -452,20 +529,39 @@ jobs:
           # (kms_deletion_window_days) and cannot be purged early — its alias
           # is released when the schedule elapses; a redeploy creates a new key.
 
-  # ── Optional: wipe TF state backend ─────────────────────────────────────────
+  # ── Optional: wipe this environment's isolated TF state backend ──────────────
   destroy-backend:
     name: "Destroy TF state backend"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: cleanup-drift
     if: github.event.inputs.destroy_tfstate_backend == 'true'
-    # The backend is shared by dev and prod, so its removal is always a
-    # prod-impacting act: it runs under `hub` whichever environment was named.
-    environment: hub
+    # Each environment has its own backend. Prod still requires hub approval;
+    # dev uses dev credentials and cannot reach prod's bucket or lock table.
+    environment: ${{ github.event.inputs.environment == 'prod' && 'hub' || 'dev' }}
     env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
       TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
       TFSTATE_LOCK_TABLE: ${{ vars.TFSTATE_LOCK_TABLE }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate account and lock-table isolation before backend deletion
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          CNA_AWS_TARGET_ACCOUNT_ID_DEV: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_DEV }}
+          CNA_AWS_TARGET_ACCOUNT_ID_PROD: ${{ vars.CNA_AWS_TARGET_ACCOUNT_ID_PROD }}
+          CNA_TFSTATE_LOCK_TABLE_DEV: ${{ vars.CNA_TFSTATE_LOCK_TABLE_DEV }}
+          CNA_TFSTATE_LOCK_TABLE_PROD: ${{ vars.CNA_TFSTATE_LOCK_TABLE_PROD }}
+        run: |
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_distinct_aws_accounts.sh"
+          assert_distinct_aws_accounts "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" \
+            "$CNA_AWS_TARGET_ACCOUNT_ID_DEV" "$CNA_AWS_TARGET_ACCOUNT_ID_PROD"
+          source "$GITHUB_WORKSPACE/scripts/ci/assert_tfstate_lock_table_isolation.sh"
+          assert_tfstate_lock_table_isolation "$ENVIRONMENT" "$TFSTATE_LOCK_TABLE" \
+            "$CNA_TFSTATE_LOCK_TABLE_DEV" "$CNA_TFSTATE_LOCK_TABLE_PROD"
+
       - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -474,46 +570,42 @@ jobs:
       - name: Verify target account
         env:
           EXPECTED_ACCOUNT_ID: ${{ vars.AWS_TARGET_ACCOUNT_ID }}
+          REGION_SHORT: ${{ vars.AWS_REGION_SHORT }}
         run: |
+          if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ || ! "$AWS_REGION" =~ ^[a-z0-9]+(-[a-z0-9]+)+-[0-9]+$ || ! "$REGION_SHORT" =~ ^[a-z0-9]{2,8}$ ]]; then
+            echo "::error::AWS_TARGET_ACCOUNT_ID, AWS_REGION and AWS_REGION_SHORT must be configured with valid client deployment values."
+            exit 1
+          fi
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          if [[ -n "$EXPECTED_ACCOUNT_ID" && "$EXPECTED_ACCOUNT_ID" != "none" && "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
+          if [[ "$EXPECTED_ACCOUNT_ID" != "$ACCOUNT_ID" ]]; then
             echo "::error::Authenticated to account $ACCOUNT_ID, but AWS_TARGET_ACCOUNT_ID expects $EXPECTED_ACCOUNT_ID"
             exit 1
           fi
-
-      # The backend is shared by dev and prod (one bucket, one table). Refuse
-      # while the other environment still has state in it — a dev reset must
-      # never take prod's state with it.
-      - name: Refuse while the other environment still has state
-        run: |
-          BUCKET="$TFSTATE_BUCKET"
-          OTHER=$([ "$ENVIRONMENT" = "dev" ] && echo prod || echo dev)
-          if aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$OTHER/" --max-keys 1 --query 'length(Contents || `[]`)' --output text 2>/dev/null | grep -qv '^0$'; then
-            echo "::error::State for '$OTHER' still exists under s3://$BUCKET/$OTHER/. Tear that environment down first (or leave destroy_tfstate_backend=false)."
-            exit 1
-          fi
-          echo "No '$OTHER' state present; backend removal may proceed."
 
       - name: Delete Terraform state backend resources
         run: |
           echo "WARNING: Deleting the Terraform state backend. All state will be permanently lost."
           BUCKET="$TFSTATE_BUCKET"
           TABLE="$TFSTATE_LOCK_TABLE"
+          if [ -z "$BUCKET" ] || [ -z "$TABLE" ]; then
+            echo "::error::TFSTATE_BUCKET and TFSTATE_LOCK_TABLE must both be configured; refusing partial backend deletion."
+            exit 1
+          fi
           if [ -n "$BUCKET" ]; then
             while :; do
-              BATCH=$(aws s3api list-object-versions --bucket "$BUCKET" --max-items 1000 --output json \
+              BATCH=$(aws s3api list-object-versions --bucket "$BUCKET" --prefix "$ENVIRONMENT/" --max-items 1000 --output json \
                 --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][] }' 2>/dev/null || echo '{"Objects":null}')
               COUNT=$(echo "$BATCH" | jq '.Objects | length // 0')
               if [ "$COUNT" = "0" ] || [ "$COUNT" = "null" ]; then break; fi
               echo "$BATCH" | jq '{Objects: .Objects[:1000], Quiet: true}' > /tmp/delete.json
               aws s3api delete-objects --bucket "$BUCKET" --delete file:///tmp/delete.json > /dev/null
             done
-            aws s3api delete-bucket --bucket "$BUCKET" || true
+            if ! aws s3api delete-bucket --bucket "$BUCKET"; then
+              echo "::error::Failed to delete state bucket '$BUCKET'; preserving lock table '$TABLE' because the backend may still be in use."
+              exit 1
+            fi
           fi
           if [ -n "$TABLE" ]; then
-            # The deploy role deliberately holds no dynamodb:DeleteTable — the
-            # lock table outlives every environment. Try, and say so if refused.
-            aws dynamodb delete-table --table-name "$TABLE" > /dev/null \
-              || echo "::warning::Could not delete lock table $TABLE with the deploy role (no dynamodb:DeleteTable by design). Delete it as an account admin: aws dynamodb delete-table --table-name $TABLE"
+            aws dynamodb delete-table --table-name "$TABLE" > /dev/null
           fi
           echo "State backend deletion initiated. Run 000-bootstrap-backend (or scripts/Initialize-CnaAwsGitHubSecrets.ps1) to recreate."

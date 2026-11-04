@@ -1,5 +1,5 @@
 output "task_bedrock_policy_json" {
-  description = "IAM policy JSON granting bedrock:InvokeModel on the configured foundation models, inference profile, and provisioned throughput. Consumed by the identity module and attached to the ECS task role."
+  description = "IAM policy JSON granting bedrock:InvokeModel on the configured model/profile source, application inference profile, and provisioned throughput. Consumed by the identity module and attached to the ECS task role."
   value       = data.aws_iam_policy_document.bedrock_invoke.json
 }
 
@@ -34,6 +34,6 @@ output "guardrail_arn" {
 }
 
 output "chat_model_arn" {
-  description = "Foundation model ARN for the primary chat model."
+  description = "Bedrock ARN for the customer-selected foundation model or system-defined inference-profile source."
   value       = local.chat_model_arn
 }

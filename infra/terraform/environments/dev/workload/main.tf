@@ -16,6 +16,7 @@ module "ai" {
   name_prefix              = local.name_prefix
   tags                     = local.tags
   environment              = var.environment
+  model_ids                = var.ai_mode == "saas" ? [var.bedrock_model_id] : []
   enable_inference_profile = var.enable_bedrock_inference_profile
 }
 
@@ -37,6 +38,8 @@ module "identity" {
   kms_deletion_window_days = var.kms_deletion_window_days
   github_owner             = var.github_owner
   github_repository        = var.github_repository
+  tfstate_bucket_name      = var.tfstate_bucket_name
+  tfstate_lock_table_name  = var.tfstate_lock_table_name
   # null in byo-api (module.ai has count 0) — identity already gates the policy
   # attachment on null.
   task_bedrock_policy_json = one(module.ai[*].task_bedrock_policy_json)
@@ -150,6 +153,7 @@ module "compute" {
     },
     local.bedrock_env_vars,
     local.ai_mode_env_vars,
+    local.byo_ai_env_vars,
   )
 
   worker_environment = merge(
@@ -179,6 +183,7 @@ module "compute" {
     },
     local.bedrock_env_vars,
     local.ai_mode_env_vars,
+    local.byo_ai_env_vars,
     local.image_update_env_vars,
   )
 
