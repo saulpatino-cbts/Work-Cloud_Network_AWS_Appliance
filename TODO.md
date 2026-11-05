@@ -415,7 +415,11 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **Recommended action:** In `Work-Cloud_Network_Azure_Appliance`, add the two tests to its
   `test_workflow_regressions.py` (and `pip install "pyyaml==6.0.3"` in its `300-validate` step), and
   record the change in both siblings' handover reports and the shared board per `CLAUDE.md`.
-- **Status:** Open.
+- **Status:** Code done 2026-11-05: Azure [PR 22](https://github.com/saulpatino-cbts/Work-Cloud_Network_Azure_Appliance/pull/22)
+  merged (`a4a234b`) with both tests and the `pyyaml==6.0.3` step; Azure's `300-validate` Repository
+  Guardrails passed on it. Still open: the handover notes in both siblings' `.reports/change-reports/`,
+  the core findings register and the CNA Total Workboard entry required by `CLAUDE.md` have not been
+  written (no checkout here had those paths and external writes were not authorized in this session).
 
 ### T-117 — Reconcile the diverged `230-image-update` between the appliances
 - **Priority:** Medium
