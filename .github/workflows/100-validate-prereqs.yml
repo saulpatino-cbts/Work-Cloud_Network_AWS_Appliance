@@ -112,7 +112,6 @@ jobs:
           CNA_ALB_CERTIFICATE_ARN: ${{ vars.CNA_ALB_CERTIFICATE_ARN }}
           CNA_CUSTOM_DOMAIN_NAME:  ${{ vars.CNA_CUSTOM_DOMAIN_NAME }}
           CNA_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CNA_CLOUDFRONT_CERTIFICATE_ARN }}
-          AWS_REGION:              ${{ vars.AWS_REGION }}
         run: |
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## Variable Check" >> "$GITHUB_STEP_SUMMARY"
