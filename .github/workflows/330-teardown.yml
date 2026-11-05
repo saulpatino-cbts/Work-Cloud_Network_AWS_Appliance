@@ -251,6 +251,7 @@ jobs:
           client-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       # Terraform requires every variable without a default even to destroy, so
       # the workload is fed what 210 planned with: images and ai_mode from the

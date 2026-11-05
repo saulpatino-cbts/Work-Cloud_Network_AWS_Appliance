@@ -65,8 +65,8 @@ export IMAGE_SIGNING_IDENTITY="https://github.com/acme/Work-Cloud_Network_Core/.
 export SIGSTORE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 export MOCK_COSIGN_MARKER="${WORK}/cosign-invoked"
 
-DIGEST="$(printf '%064d' 0)"
-OTHER_DIGEST="$(printf '%064d' 1)"
+DIGEST="0000000000000000000000000000000000000000000000000000000000000000"
+OTHER_DIGEST="1111111111111111111111111111111111111111111111111111111111111111"
 BUILDER="https://github.com/acme/Work-Cloud_Network_Core/actions/runs/123456789"
 OTHER_BUILDER="https://github.com/attacker/other/actions/runs/123456789"
 PINNED_REF="docker.io/acme/cna:api-sha-1234567@sha256:${DIGEST}"

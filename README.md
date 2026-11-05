@@ -323,7 +323,7 @@ Configuration comes from three places, in this order of authority:
 |---|---|---|
 | Secret | `AWS_DEPLOY_ROLE_ARN` | OIDC deploy role assumed by every workflow |
 | Secret | `CNA_AWS_ROLE_ARN`, `CNA_PUBLISH_BUCKET` | Client portal publishing role and bucket identifier (`320`, `dev` environment; separate from the deploy role) |
-| Secret | `GH_APP_ID`, `GH_APP_PRIVATE_KEY` | GitHub App used to read the core's build manifest (`230`) and to manage repository variables |
+| Secret | `GH_APP_ID`, `GH_APP_PRIVATE_KEY` | GitHub App used to read the core's build manifest (`230`) and to manage repository variables; installed on the core **and** on this repository (its tokens are scoped to one repository) |
 | Secret | `DOCKERHUB_TOKEN` | Pull access for the private `cna` images |
 | Secret | `CNA_POSTGRES_ADMIN_PASSWORD`, `CNA_ENTRA_CLIENT_SECRET`, `CNA_NEXTAUTH_SECRET`, `CNA_CREDENTIAL_ENCRYPTION_KEY` | Runtime secrets Terraform writes to AWS Secrets Manager (`100` checks them) |
 | Variable | `CORE_OWNER`, `CORE_REPO` | Actual owner and repository of the upstream image publisher; not inferred from the client deployment repository |
