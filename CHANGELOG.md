@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The deploy role's new Cloud Map permission is scoped to the namespace and service lifecycle actions Terraform and ECS Service Connect use, not `servicediscovery:*`.
 
 ### Fixed
+- **`100-validate-prereqs.yml` was an invalid workflow file.** The "Check required GitHub Variables"
+  step declared `AWS_REGION` twice in its `env` map, so GitHub rejected the whole file: every push
+  produced a failed run named after the file path and the workflow could not be dispatched. The
+  duplicate key is removed and a stale comment claiming the job has no `environment:` key is
+  corrected. Every workflow in the Core, AWS and Azure repositories was scanned for duplicate keys;
+  none other was found.
 - **ECS health checks used `curl`, which the core images do not ship** (NET-AWS-001). Every api and web task would have been marked unhealthy and restarted in a loop. The api check is a Python `urllib` probe of `/health`; the web check is a Node `fetch` of `/api/health`.
 - **`enable_scale_to_zero` can no longer park the api and web at zero** (NET-AWS-006) — target-tracking cannot scale a service from 0, so dev would have stayed down after its first idle window. The api and web keep `max(1, min_count)`; only the worker honours scale-to-zero.
 - **Availability zones derive from the region** (NET-AWS-007). `us-east-1a`/`us-east-1b` were hardcoded; the platform roots now read `data.aws_availability_zones` (overridable with `availability_zones`), and `320-publish-portal` uses the `AWS_REGION` variable.
