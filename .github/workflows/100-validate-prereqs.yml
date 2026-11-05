@@ -112,7 +112,6 @@ jobs:
           CNA_ALB_CERTIFICATE_ARN: ${{ vars.CNA_ALB_CERTIFICATE_ARN }}
           CNA_CUSTOM_DOMAIN_NAME:  ${{ vars.CNA_CUSTOM_DOMAIN_NAME }}
           CNA_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CNA_CLOUDFRONT_CERTIFICATE_ARN }}
-          AWS_REGION:              ${{ vars.AWS_REGION }}
         run: |
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## Variable Check" >> "$GITHUB_STEP_SUMMARY"
@@ -190,10 +189,9 @@ jobs:
 
           # Optional BYO-AI/MCP configuration is reported without exposing values.
 
-          # CNA_NEXTAUTH_URL is NOT checked here: this job runs with no
-          # `environment:` key (it's a repo-level preflight, see the header
-          # comment), and the URL is only known once 210 has created the
-          # CloudFront distribution — 210's apply job reports it.
+          # CNA_NEXTAUTH_URL is NOT checked here: the URL is only known once
+          # 210 has created the CloudFront distribution — 210's apply job
+          # reports it.
 
           if [[ "$FAILED" -eq 1 ]]; then
             echo ""
