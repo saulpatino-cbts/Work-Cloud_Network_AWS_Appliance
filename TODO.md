@@ -6,11 +6,11 @@ in the core repository's `TODO.md`; this file covers deployment, operations and 
 Items requiring external input — an approval, an account, a credential, an access grant — belong
 in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
-**Last reviewed:** 2026-11-04
+**Last reviewed:** 2026-11-05
 
 | Phase | Theme | Items |
 |---|---|---|
-| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-113 |
+| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-117 |
 
 ---
 
@@ -402,3 +402,30 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   broad IAM remains unverified. Production remains blocked on R-017 (approval bound to the exact
   applied workload plan). See `README.md` →
   Client installation and first deployment and `CHANGELOG.md` → Unreleased.
+
+### T-116 — Azure: add the workflow regression tests written for the AWS mirror
+- **Priority:** Medium
+- **Origin:** Mirror of Azure `TODO.md` → T-108 into this repository (draft PR from `work/happy-meitner-qcjmsa`).
+- **Description:** AWS now runs `scripts/ci/test_workflow_regressions.py`, which fails on a duplicate
+  key in any workflow file and on a GitHub App token without `repositories:`. Azure's
+  `test_workflow_regressions.py` covers neither. The Azure workflows pass both checks today (verified
+  2026-11-05 by scanning every file).
+- **Dependencies:** Azure appliance owner. No exception is needed: Azure's `210` and `230` tokens
+  already set `repositories:` (the Azure `330` creates no App token).
+- **Recommended action:** In `Work-Cloud_Network_Azure_Appliance`, add the two tests to its
+  `test_workflow_regressions.py` (and `pip install "pyyaml==6.0.3"` in its `300-validate` step), and
+  record the change in both siblings' handover reports and the shared board per `CLAUDE.md`.
+- **Status:** Open.
+
+### T-117 — Reconcile the diverged `230-image-update` between the appliances
+- **Priority:** Medium
+- **Description:** `230-image-update.yml` is a shared file but differs by about 40 lines. AWS validates
+  `CORE_OWNER`/`CORE_REPO` and requires `IMAGE_SIGNING_IDENTITY` to match them inside the
+  manifest-compare step; Azure does the same in a separate earlier step and keeps `OWNER` and
+  `CORE_REPO` as different variables. Both enforce the same policy; the code differs. Likewise
+  `scripts/ci/` and `300-validate` differ beyond the cloud-specific files (Azure-only: runner firewall
+  windows, `validate_client_config.sh`, BYO egress `terraform test`).
+- **Recommended action:** Pick one shape (Azure's separate validation step is easier to test), apply it
+  to both copies byte-for-byte except the cloud-specific lines, and diff them in the delivery step.
+  Not done here: `230` was just verified green on both appliances (2026-11-05) and was not touched.
+- **Status:** Open.

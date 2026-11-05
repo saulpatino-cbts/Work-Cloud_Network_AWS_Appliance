@@ -20,6 +20,9 @@ Environment:
                             "azurerm_log_analytics_workspace,azurerm_postgresql_flexible_server"
                             or "aws_cloudwatch_log_group,aws_db_instance".
   PLAN_LABEL                optional name for messages (e.g. "dev/workload").
+  PROTECTED_RESOURCE_ADDRESSES  optional comma-separated exact Terraform resource
+                               addresses, independent of protected types.
+                               Quoted instance keys are unsupported and refused.
 
 Exit status is 0 when no protected resource is destroyed, 1 otherwise; output is
 plain text so it reads well in a workflow log.
@@ -34,9 +37,18 @@ import sys
 
 def main() -> int:
     types = {t.strip() for t in os.environ.get("PROTECTED_RESOURCE_TYPES", "").split(",") if t.strip()}
+    raw_addresses = os.environ.get("PROTECTED_RESOURCE_ADDRESSES", "")
+    if '"' in raw_addresses:
+        print("::error::PROTECTED_RESOURCE_ADDRESSES does not support quoted instance keys; use protected resource types.", file=sys.stderr)
+        return 1
+    addresses = {
+        address.strip()
+        for address in raw_addresses.split(",")
+        if address.strip()
+    }
     label = os.environ.get("PLAN_LABEL", "plan")
-    if not types:
-        print(f"::error::PROTECTED_RESOURCE_TYPES is empty — nothing to guard for {label}.", file=sys.stderr)
+    if not types and not addresses:
+        print(f"::error::No protected resource types or addresses configured for {label}.", file=sys.stderr)
         return 1
 
     if len(sys.argv) > 1:
@@ -48,7 +60,9 @@ def main() -> int:
     offending = []
     for change in plan.get("resource_changes") or []:
         actions = set((change.get("change") or {}).get("actions") or [])
-        if "delete" in actions and change.get("type") in types:
+        if "delete" in actions and (
+            change.get("type") in types or change.get("address") in addresses
+        ):
             kind = "replaced" if "create" in actions else "destroyed"
             offending.append((change.get("address", "?"), change.get("type"), kind))
 
@@ -62,7 +76,7 @@ def main() -> int:
             )
         return 1
 
-    print(f"{label}: no protected resource ({', '.join(sorted(types))}) is destroyed or replaced.")
+    print(f"{label}: no protected resource ({', '.join(sorted(types | addresses))}) is destroyed or replaced.")
     return 0
 
 

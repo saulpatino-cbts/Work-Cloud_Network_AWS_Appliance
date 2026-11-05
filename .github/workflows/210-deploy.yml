@@ -698,6 +698,7 @@ jobs:
           client-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       # Platform = networking only (VPC, subnets, NAT, VPC endpoints, flow logs).
       # It declares no app variables — passing them here would error with "an
@@ -871,28 +872,40 @@ jobs:
 
       # No saved plan file leaves this job: a workload plan carries every
       # TF_VAR_* secret value in plaintext, and the apply job re-plans both roots
-      # anyway. The human-readable plan text goes to the job summary so the
-      # reviewer can read what the release intends before approving the apply.
-      - name: Publish plan text to the job summary
+      # anyway. Do not publish plan values, even `terraform show` text:
+      # provider-generated values and future schema mistakes may not carry a
+      # sensitivity marker. Only action counts reach the job summary.
+      - name: Terraform plan summary
         run: |
           summarize() {
             local LABEL="$1" DIR="$2"
             {
               echo "### terraform plan — ${LABEL} (${ENVIRONMENT})"
               echo
+              echo '```'
               if [ -f "$DIR/tfplan" ]; then
-                echo '<details><summary>Show plan</summary>'
-                echo
-                echo '```'
-                terraform -chdir="$DIR" show -no-color tfplan | head -n 2000
-                echo '```'
-                echo '</details>'
+                # Informational step: an unreadable plan must not fail the plan job.
+                if ! terraform -chdir="$DIR" show -json tfplan | python3 -c '
+          import collections, json, sys
+          counts = collections.Counter(
+              "+".join(rc["change"]["actions"])
+              for rc in json.load(sys.stdin).get("resource_changes") or []
+          )
+          for action in sorted(counts):
+              print(f"{action}: {counts[action]}")
+          if not counts:
+              print("no resource changes")
+          ' 2>/dev/null; then
+                  echo "(plan summary unavailable)"
+                fi
               else
-                echo "_No plan produced (greenfield: the workload is planned after the platform apply)._"
+                echo "(no plan produced — greenfield: the workload is planned after the platform apply)"
               fi
+              echo '```'
               echo
             } >> "$GITHUB_STEP_SUMMARY"
           }
+          echo "_Only action counts are published. Plans remain local to the runner; apply re-plans after approval._" >> "$GITHUB_STEP_SUMMARY"
           summarize "platform" "."
           summarize "workload" "../workload"
 
@@ -1010,6 +1023,7 @@ jobs:
           client-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       # Applying a saved plan file (-out=tfplan) re-uses the variable values captured
       # by the plan step just above, so no -var / TF_VAR_* are passed here — Terraform

@@ -50,6 +50,12 @@ jobs:
           bash -n scripts/ci/verify_image_signature.sh
           bash -n scripts/ci/test_verify_image_signature.sh
           bash scripts/ci/test_verify_image_signature.sh
+      - name: Destructive plan guard regression tests
+        run: python3 scripts/ci/test_refuse_destructive_plan.py
+      - name: Workflow regression tests (duplicate keys, scoped App tokens, preflight secrets)
+        run: |
+          pip install "pyyaml==6.0.3"
+          python3 scripts/ci/test_workflow_regressions.py
       - name: Verify BYO AI configuration regression cases
         run: |
           bash -n scripts/ci/resolve_byo_ai_config.sh
