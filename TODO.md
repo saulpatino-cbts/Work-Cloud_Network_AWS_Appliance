@@ -433,8 +433,11 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   to both copies byte-for-byte except the cloud-specific lines, and diff them in the delivery step.
   Not done here: `230` was just verified green on both appliances (2026-11-05) and was not touched.
 - **Status:** `230-image-update.yml` done 2026-11-06 in both appliances (byte-identical; upstream-source
-  validation is a separate first step; regression test added to both). Verification by manual
-  `workflow_dispatch` of `230` on each appliance is recorded after the PRs merge. Still open: Azure's `100` preflight and `scripts/ci/validate_client_config.sh` still accept any
+  validation is a separate first step; regression test added to both). Verified live 2026-11-06 by manual
+  `workflow_dispatch` of `230` on `main` in both appliances (AWS run 42162322126, Azure run 42162404326):
+  the validation step ran first and passed, the App token, manifest fetch and compare steps passed, and
+  `update-dev`/`request-prod` skipped with "no release catalog yet". Not exercised: the `update-dev`
+  path (no catalog; a first `210` deploy is a human step). Still open: Azure's `100` preflight and `scripts/ci/validate_client_config.sh` still accept any
   `@refs/heads/<branch>` signing identity and do not check `CORE_OWNER`/`CORE_REPO`, so a config can pass
   `100` and fail `230` (AWS's `100` already enforces the exact form); align them to the `230` rule. The other
   `scripts/ci/` and `300-validate` differences are cloud-specific (Azure runner-firewall windows,
