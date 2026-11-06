@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Images are deployed by digest** (core `TODO.md` → T-701; v1.0 review findings RELEASE-001 / IMG-012). `230-image-update` now requires the core manifest's `digests{}` and composes the pinned reference `docker.io/<ns>/cna:<role>-sha-<7>@sha256:<digest>` for the api, worker, web and migrator images — the tag stays for people and for the web tier's image-update check, the digest is what the platform pulls — and passes all four to `210` (new `migrator_image` input). A manifest without `digests{}` fails the update with a message to rebuild the core first. `210-deploy` refuses any empty or floating (`*-latest`) reference, drops the `migrator-latest` default and the never-working "resolve from the appliance's own build manifest" step, validates every image input with one shared `validate_image_ref` function (pinned accepted, tag-only accepted with a warning, anything else refused), and records the pinned references in the release catalog. Rollback takes `previous_migrator_image` through `workflow_call`; a dispatch rollback resolves the migrator from the catalog record that matches `previous_api_image` (GitHub caps `workflow_dispatch` at ten inputs). `220-fast-redeploy` applies the same validation; `350`/`360` no longer fall back to floating tags when the catalog has no image (they fail instead); `100-validate-prereqs` checks Docker Hub pull access with an authenticated tags listing rather than by pulling `*-latest`. Terraform image variables lose their `example-namespace/*-latest` module defaults and document the pinned form. Shared change — `230`, `resolve_rollback_target.py`, `validate_image_ref` and the `update-available` issue template are byte-identical in the sibling appliance.
 
 ### Security
+- **`230-image-update.yml` is byte-identical in both appliances** (AWS `TODO.md` → T-117). The two
+  copies had drifted by about 40 lines while enforcing the same policy. The upstream-source check is now
+  its own first step, `Validate upstream source independently of client repository`, and runs **before**
+  any GitHub App token is requested (AWS previously requested the token from unvalidated variables).
+  It requires `CORE_OWNER` to be a valid GitHub login, `CORE_REPO` to be a valid repository name, and
+  `IMAGE_SIGNING_IDENTITY` to be exactly
+  `https://github.com/<CORE_OWNER>/<CORE_REPO>/.github/workflows/200-build-images.yml@refs/heads/main`.
+  `scripts/ci/test_workflow_regressions.py` runs that step against good and bad values.
 - **GitHub App tokens in `210` and `330` are scoped to this repository** (mirrors Azure `TODO.md`
   → T-108). Both `210` tokens and the `330` token covered every repository the App is installed on;
   each now sets `repositories: ${{ github.event.repository.name }}`. `230` still names the core
