@@ -10,7 +10,7 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 
 | Phase | Theme | Items |
 |---|---|---|
-| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-118 |
+| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-119 |
 
 ---
 
@@ -484,3 +484,19 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   6. Until step 3 or 4 has run, `350`/`360` report drift for an environment that still holds the
      worker in state; that is expected.
 - **Status:** Prepared 2026-11-13 on branch `work/retire-cna-worker`; not merged, not applied.
+
+### T-119 — The dispatch-dialog rollback cannot reach the rollback-target resolver (shared with Azure)
+- **Priority:** Medium — a rollback still works when the operator pastes both `previous_*_image`
+  references; only the "leave them empty and let the catalog decide" path is dead.
+- **Description:** `210-deploy.yml` runs `scripts/ci/resolve_rollback_target.py` in the plan job only
+  when `previous_api_image` or `previous_web_image` is empty (`if:` near line 545), but the earlier
+  policy-gates step exits 1 when either of them is empty (near line 235). The resolver is therefore
+  unreachable from the `workflow_dispatch` dialog, although comments describe it as the dialog's
+  fallback. The Azure appliance has the same shape (its own TODO item). Found by the independent
+  review of T-118 (2026-11-13); pre-existing, not introduced by T-118.
+- **Recommended action:** decide one behaviour for both appliances in one change set — either let
+  policy-gates defer to the resolver when both `previous_*_image` fields are empty (and fail only if
+  it finds no approved record), or drop the resolver step and the comments that promise it. Add a
+  regression test in `test_workflow_regressions.py` either way; keep `resolve_rollback_target.py`
+  byte-identical between the appliances.
+- **Status:** Open.
