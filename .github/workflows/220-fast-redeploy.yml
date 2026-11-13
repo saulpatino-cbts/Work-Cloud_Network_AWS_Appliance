@@ -31,11 +31,6 @@ on:
         required: false
         default: ""
         type: string
-      worker_image:
-        description: Worker image reference (empty = leave unchanged)
-        required: false
-        default: ""
-        type: string
       web_image:
         description: Web image reference (empty = leave unchanged)
         required: false
@@ -80,15 +75,13 @@ jobs:
       - name: Validate — at least one image must be specified
         env:
           INPUT_API_IMAGE: ${{ inputs.api_image }}
-          INPUT_WORKER_IMAGE: ${{ inputs.worker_image }}
           INPUT_WEB_IMAGE: ${{ inputs.web_image }}
           DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
         run: |
           set -euo pipefail
           if [ -z "$INPUT_API_IMAGE" ] && \
-             [ -z "$INPUT_WORKER_IMAGE" ] && \
              [ -z "$INPUT_WEB_IMAGE" ]; then
-            echo "::error::At least one image (api_image, worker_image, or web_image) must be specified."
+            echo "::error::At least one image (api_image or web_image) must be specified."
             exit 1
           fi
           if [ -z "$DOCKERHUB_NAMESPACE" ]; then
@@ -122,12 +115,11 @@ jobs:
           }
 
           [ -z "$INPUT_API_IMAGE" ]    || validate_image_ref api "$INPUT_API_IMAGE"
-          [ -z "$INPUT_WORKER_IMAGE" ] || validate_image_ref worker "$INPUT_WORKER_IMAGE"
           [ -z "$INPUT_WEB_IMAGE" ]    || validate_image_ref web "$INPUT_WEB_IMAGE"
 
       # The checkout serves the signature verifier below (as in the Azure
       # version) and the ECS roll script under scripts/ci, which keeps the
-      # three service steps one line each.
+      # two service steps one line each.
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -144,7 +136,6 @@ jobs:
       - name: Verify image signatures and provenance
         env:
           INPUT_API_IMAGE: ${{ inputs.api_image }}
-          INPUT_WORKER_IMAGE: ${{ inputs.worker_image }}
           INPUT_WEB_IMAGE: ${{ inputs.web_image }}
           DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -156,7 +147,6 @@ jobs:
           fi
           echo "$DOCKERHUB_TOKEN" | docker login docker.io --username "$DOCKERHUB_NAMESPACE" --password-stdin
           [ -n "$INPUT_API_IMAGE" ]    && scripts/ci/verify_image_signature.sh api    "$INPUT_API_IMAGE"
-          [ -n "$INPUT_WORKER_IMAGE" ] && scripts/ci/verify_image_signature.sh worker "$INPUT_WORKER_IMAGE"
           [ -n "$INPUT_WEB_IMAGE" ]    && scripts/ci/verify_image_signature.sh web    "$INPUT_WEB_IMAGE"
           true
 
@@ -182,8 +172,8 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       # Names are deterministic from the Terraform locals: cluster
-      # <prefix>-cluster, services <prefix>-{api,worker,web}, containers
-      # cna-{api,worker,web}, with prefix cna-<env>-<region_short>. The cluster
+      # <prefix>-cluster, services <prefix>-{api,web}, containers
+      # cna-{api,web}, with prefix cna-<env>-<region_short>. The cluster
       # input overrides the derived name only — the service names follow it.
       - name: Derive ECS names from environment
         id: names
@@ -212,11 +202,10 @@ jobs:
           else
             CLUSTER="${PREFIX}-cluster"
           fi
-          echo "cluster=${CLUSTER}"              >> "$GITHUB_OUTPUT"
-          echo "prefix=${PREFIX}"                >> "$GITHUB_OUTPUT"
-          echo "api_service=${PREFIX}-api"       >> "$GITHUB_OUTPUT"
-          echo "worker_service=${PREFIX}-worker" >> "$GITHUB_OUTPUT"
-          echo "web_service=${PREFIX}-web"       >> "$GITHUB_OUTPUT"
+          echo "cluster=${CLUSTER}"        >> "$GITHUB_OUTPUT"
+          echo "prefix=${PREFIX}"          >> "$GITHUB_OUTPUT"
+          echo "api_service=${PREFIX}-api" >> "$GITHUB_OUTPUT"
+          echo "web_service=${PREFIX}-web" >> "$GITHUB_OUTPUT"
 
       # `az containerapp update --image` becomes: read the service's current
       # task definition, swap the application container's image, register it as
@@ -229,15 +218,6 @@ jobs:
           CLUSTER: ${{ steps.names.outputs.cluster }}
           SERVICE: ${{ steps.names.outputs.api_service }}
           CONTAINER: cna-api
-        run: bash "$GITHUB_WORKSPACE/scripts/ci/ecs_update_image.sh"
-
-      - name: Update cna-worker image
-        if: inputs.worker_image != ''
-        env:
-          IMAGE: ${{ inputs.worker_image }}
-          CLUSTER: ${{ steps.names.outputs.cluster }}
-          SERVICE: ${{ steps.names.outputs.worker_service }}
-          CONTAINER: cna-worker
         run: bash "$GITHUB_WORKSPACE/scripts/ci/ecs_update_image.sh"
 
       - name: Update cna-web image
@@ -280,10 +260,8 @@ jobs:
       - name: Summary
         env:
           INPUT_API_IMAGE: ${{ inputs.api_image }}
-          INPUT_WORKER_IMAGE: ${{ inputs.worker_image }}
           INPUT_WEB_IMAGE: ${{ inputs.web_image }}
           API_SERVICE: ${{ steps.names.outputs.api_service }}
-          WORKER_SERVICE: ${{ steps.names.outputs.worker_service }}
           WEB_SERVICE: ${{ steps.names.outputs.web_service }}
         run: |
           echo "## Refresh Complete" >> "$GITHUB_STEP_SUMMARY"
@@ -292,9 +270,6 @@ jobs:
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$INPUT_API_IMAGE" ]; then
             echo "| \`${API_SERVICE}\` | \`${INPUT_API_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [ -n "$INPUT_WORKER_IMAGE" ]; then
-            echo "| \`${WORKER_SERVICE}\` | \`${INPUT_WORKER_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -n "$INPUT_WEB_IMAGE" ]; then
             echo "| \`${WEB_SERVICE}\` | \`${INPUT_WEB_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"

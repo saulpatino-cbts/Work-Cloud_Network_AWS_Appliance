@@ -1,7 +1,10 @@
 """Offline tests of workflow files and the shell bodies of their safety assertions."""
 
+import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +14,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+TERRAFORM = ROOT / "infra" / "terraform"
+WORKER = re.compile(r"\bworker", re.IGNORECASE)
+RETIRED_LOG_GROUP = "module.observability.aws_cloudwatch_log_group.worker"
 
 
 class _NoDuplicateKeysLoader(yaml.SafeLoader):
@@ -142,6 +148,111 @@ class WorkflowRegressionTests(unittest.TestCase):
                     with self.subTest(workflow=path.name, job=job_name):
                         self.assertTrue(str((step.get("with") or {}).get("repositories", "")).strip())
         self.assertGreaterEqual(found, 4)
+
+
+class RetiredWorkerTests(unittest.TestCase):
+    """The cna-worker image is retired (core REVIEW.md R-016); nothing may deploy one again."""
+
+    def compare_step(self):
+        workflow = yaml.safe_load((WORKFLOWS / "230-image-update.yml").read_text(encoding="utf-8"))
+        return next(step for step in workflow["jobs"]["detect"]["steps"] if step.get("id") == "compare")["run"]
+
+    def test_image_update_guard_does_not_require_a_worker_image(self):
+        # The core's manifest has carried no images.worker since R-016; a guard
+        # that requires it fails every 230 run at the detect step.
+        script = self.compare_step()
+        guard = next(line for line in script.splitlines() if "jq -e" in line and ".sha_tag" in line)
+        self.assertNotIn("worker", guard)
+        self.assertIsNone(WORKER.search(script), "230's compare step must not read, loop over or emit a worker image")
+        workflow = yaml.safe_load((WORKFLOWS / "230-image-update.yml").read_text(encoding="utf-8"))
+        self.assertNotIn("worker_image", workflow["jobs"]["detect"]["outputs"])
+        self.assertNotIn("worker_image", workflow["jobs"]["update-dev"]["with"])
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is not installed (GitHub-hosted runners have it)")
+    def test_image_update_accepts_a_manifest_with_or_without_worker(self):
+        def image(role):
+            return f"docker.io/example/cna:{role}-sha-abcdef1"
+
+        def digest(digit):
+            return f"docker.io/example/cna@sha256:{digit * 64}"
+
+        current = {
+            "sha_tag": "sha-abcdef1",
+            "run_id": "1",
+            "images": {"api": image("api"), "web": image("web"), "migrator": image("migrator")},
+            "digests": {"api": digest("1"), "web": digest("2"), "migrator": digest("3")},
+        }
+        # Manifests built before core R-016 still carry the worker.
+        legacy = json.loads(json.dumps(current))
+        legacy["images"]["worker"] = image("worker")
+        legacy["digests"]["worker"] = digest("4")
+        no_web = json.loads(json.dumps(current))
+        del no_web["images"]["web"]
+        script = self.compare_step()
+        self.assertIn("M=/tmp/latest-build.json", script)
+        for label, manifest, expected in (("current", current, 0), ("legacy", legacy, 0), ("no web", no_web, 1)):
+            with self.subTest(manifest=label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "latest-build.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                output = Path(directory) / "output"
+                result = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", script.replace("M=/tmp/latest-build.json", f"M='{path.as_posix()}'")],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    cwd=directory,
+                    env={
+                        **os.environ,
+                        "CORE_OWNER": "acme-core",
+                        "CORE_REPO": "cna-core",
+                        "DOCKERHUB_NAMESPACE": "example",
+                        "FORCE": "false",
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                if expected == 0:
+                    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+                    self.assertEqual(outputs["api_image"], image("api") + "@sha256:" + "1" * 64)
+                    self.assertEqual(outputs["web_image"], image("web") + "@sha256:" + "2" * 64)
+                    self.assertEqual(outputs["migrator_image"], image("migrator") + "@sha256:" + "3" * 64)
+                    self.assertNotIn("worker_image", outputs)
+
+    def test_no_workflow_script_or_template_references_a_worker(self):
+        paths = [
+            *sorted(WORKFLOWS.glob("*.yml")),
+            *sorted((ROOT / ".github" / "ISSUE_TEMPLATE").glob("*")),
+            *sorted((ROOT / "scripts" / "ci").glob("*.sh")),
+        ]
+        self.assertTrue(paths)
+        for path in paths:
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                hits = [n for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if WORKER.search(line)]
+                self.assertEqual(hits, [])
+
+    def test_terraform_declares_no_worker_except_the_log_group_removal(self):
+        # The only worker left in Terraform is the `removed` block that takes the
+        # log group out of state without deleting it (comments around it aside).
+        files = [path for path in sorted(TERRAFORM.rglob("*.tf")) if ".terraform" not in path.parts]
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                    stripped = line.strip()
+                    if not WORKER.search(stripped) or stripped.startswith("#"):
+                        continue
+                    self.assertEqual(stripped, f"from = {RETIRED_LOG_GROUP}", f"line {number}")
+
+    def test_each_workload_root_forgets_the_worker_log_group_without_destroying_it(self):
+        # refuse_destructive_plan.py protects aws_cloudwatch_log_group: without
+        # `destroy = false` the plan would delete it and every apply would refuse.
+        pattern = re.compile(
+            r"removed\s*\{\s*from\s*=\s*" + re.escape(RETIRED_LOG_GROUP) + r"\s*lifecycle\s*\{\s*destroy\s*=\s*false\s*\}\s*\}"
+        )
+        for environment in ("dev", "prod"):
+            with self.subTest(environment=environment):
+                text = (TERRAFORM / "environments" / environment / "workload" / "main.tf").read_text(encoding="utf-8")
+                self.assertEqual(len(pattern.findall(text)), 1)
 
 
 if __name__ == "__main__":

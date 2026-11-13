@@ -1,7 +1,6 @@
 locals {
-  api_log_group_name    = "/ecs/${var.name_prefix}/api"
-  worker_log_group_name = "/ecs/${var.name_prefix}/worker"
-  web_log_group_name    = "/ecs/${var.name_prefix}/web"
+  api_log_group_name = "/ecs/${var.name_prefix}/api"
+  web_log_group_name = "/ecs/${var.name_prefix}/web"
 
   # ECS cluster/service and RDS instance names are deterministic from
   # name_prefix (see compute + database modules), so the alarms can reference
@@ -11,9 +10,8 @@ locals {
   db_instance_id = "${var.name_prefix}-psql"
 
   services = {
-    api    = "${var.name_prefix}-api"
-    worker = "${var.name_prefix}-worker"
-    web    = "${var.name_prefix}-web"
+    api = "${var.name_prefix}-api"
+    web = "${var.name_prefix}-web"
   }
 
   alarm_services = var.enable_alarms ? local.services : {}

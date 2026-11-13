@@ -106,21 +106,9 @@ variable "api_image" {
   type        = string
 }
 
-variable "worker_image" {
-  description = "Container image for CNA worker, pinned: docker.io/<namespace>/cna:worker-sha-<7>@sha256:<digest>"
-  type        = string
-}
-
 variable "web_image" {
   description = "Container image for CNA Web, pinned: docker.io/<namespace>/cna:web-sha-<7>@sha256:<digest>"
   type        = string
-}
-
-# ─── Scaling / FinOps ─────────────────────────────────────────────────────────
-variable "enable_scale_to_zero" {
-  description = "Collapse all ECS service desired counts to 0 when idle. Dev cost saving; disabled in prod."
-  type        = bool
-  default     = false
 }
 
 # ─── Database ─────────────────────────────────────────────────────────────────

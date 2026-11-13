@@ -20,7 +20,7 @@ locals {
   # ── AI mode ─────────────────────────────────────────────────────────────────
   ai_saas = var.ai_mode == "saas"
 
-  # Mode-independent runtime contract, injected into all three services. The
+  # Mode-independent runtime contract, injected into both services. The
   # app resolves its engine family from these (apps/cna-web/lib/ai-engine-rules.ts,
   # cna/ai_engine/chat_agent.py).
   ai_mode_env_vars = {

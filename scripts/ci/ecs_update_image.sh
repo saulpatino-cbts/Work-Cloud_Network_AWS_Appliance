@@ -11,7 +11,7 @@
 # Environment:
 #   CLUSTER    ECS cluster name
 #   SERVICE    ECS service name (also the task-definition family)
-#   CONTAINER  container name inside the task definition (cna-api, cna-worker, cna-web)
+#   CONTAINER  container name inside the task definition (cna-api, cna-web)
 #   IMAGE      new image reference
 set -euo pipefail
 

@@ -69,11 +69,6 @@ variable "api_image" {
   type        = string
 }
 
-variable "worker_image" {
-  description = "Container image for CNA worker, pinned: docker.io/<namespace>/cna:worker-sha-<7>@sha256:<digest>"
-  type        = string
-}
-
 variable "web_image" {
   description = "Container image for CNA Web (Next.js 15), pinned: docker.io/<namespace>/cna:web-sha-<7>@sha256:<digest>"
   type        = string
@@ -88,18 +83,6 @@ variable "api_cpu" {
 
 variable "api_memory" {
   description = "Memory (MiB) for the API task."
-  type        = number
-  default     = 1024
-}
-
-variable "worker_cpu" {
-  description = "CPU units for the worker task (1024 = 1 vCPU)."
-  type        = number
-  default     = 512
-}
-
-variable "worker_memory" {
-  description = "Memory (MiB) for the worker task."
   type        = number
   default     = 1024
 }
@@ -123,22 +106,10 @@ variable "api_min_count" {
   default     = 1
 }
 
-variable "worker_min_count" {
-  description = "Baseline desired task count for the worker service."
-  type        = number
-  default     = 1
-}
-
 variable "web_min_count" {
   description = "Baseline desired task count for the web service."
   type        = number
   default     = 1
-}
-
-variable "enable_scale_to_zero" {
-  description = "Collapse the worker's desired/min count to 0 when idle (dev cost saving). The api and web services always keep at least one task: they are target-tracking scaled and cannot scale out from zero."
-  type        = bool
-  default     = false
 }
 
 # ─── Ingress ports ────────────────────────────────────────────────────────────
@@ -162,13 +133,6 @@ variable "api_environment" {
   nullable    = false
 }
 
-variable "worker_environment" {
-  description = "Plain environment variables for the worker container. Map key is the env var name."
-  type        = map(string)
-  default     = {}
-  nullable    = false
-}
-
 variable "web_environment" {
   description = "Plain environment variables for the web container. Map key is the env var name."
   type        = map(string)
@@ -178,13 +142,6 @@ variable "web_environment" {
 
 variable "api_secrets" {
   description = "Secret-backed env vars for the API container. Map key is the env var name, value is the Secrets Manager secret ARN."
-  type        = map(string)
-  default     = {}
-  nullable    = false
-}
-
-variable "worker_secrets" {
-  description = "Secret-backed env vars for the worker container. Map key is the env var name, value is the Secrets Manager secret ARN."
   type        = map(string)
   default     = {}
   nullable    = false
@@ -200,11 +157,6 @@ variable "web_secrets" {
 # ─── Logging ──────────────────────────────────────────────────────────────────
 variable "api_log_group_name" {
   description = "CloudWatch log group name for the API service (owned by the observability module)."
-  type        = string
-}
-
-variable "worker_log_group_name" {
-  description = "CloudWatch log group name for the worker service (owned by the observability module)."
   type        = string
 }
 
@@ -253,12 +205,6 @@ variable "enable_autoscaling" {
 
 variable "api_max_count" {
   description = "Maximum task count for the API service."
-  type        = number
-  default     = 4
-}
-
-variable "worker_max_count" {
-  description = "Maximum task count for the worker service."
   type        = number
   default     = 4
 }

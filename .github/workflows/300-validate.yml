@@ -52,6 +52,8 @@ jobs:
           bash scripts/ci/test_verify_image_signature.sh
       - name: Destructive plan guard regression tests
         run: python3 scripts/ci/test_refuse_destructive_plan.py
+      - name: Rollback target resolver regression tests
+        run: python3 scripts/ci/test_resolve_rollback_target.py
       - name: Workflow regression tests (duplicate keys, scoped App tokens, preflight secrets)
         run: |
           pip install "pyyaml==6.0.3"

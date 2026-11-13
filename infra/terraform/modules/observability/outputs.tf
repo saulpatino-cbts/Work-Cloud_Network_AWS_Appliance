@@ -3,11 +3,6 @@ output "api_log_group_name" {
   value       = aws_cloudwatch_log_group.api.name
 }
 
-output "worker_log_group_name" {
-  description = "CloudWatch log group name for the worker service. Passed to the compute module."
-  value       = aws_cloudwatch_log_group.worker.name
-}
-
 output "web_log_group_name" {
   description = "CloudWatch log group name for the web service. Passed to the compute module."
   value       = aws_cloudwatch_log_group.web.name
@@ -16,9 +11,8 @@ output "web_log_group_name" {
 output "log_group_arns" {
   description = "Map of service => CloudWatch log group ARN."
   value = {
-    api    = aws_cloudwatch_log_group.api.arn
-    worker = aws_cloudwatch_log_group.worker.arn
-    web    = aws_cloudwatch_log_group.web.arn
+    api = aws_cloudwatch_log_group.api.arn
+    web = aws_cloudwatch_log_group.web.arn
   }
 }
 
