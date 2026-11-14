@@ -32,6 +32,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backlog items follow the core's W12 workflow.** `CLAUDE.md` names the loop every change goes through (spec → specialist implementation → independent adversarial verification → the checks listed there → docs → draft PR, humans merge) and this repository's definition of done; the workflow itself lives in the core's `.claude/orchestration/workflows.md`.
 - **Images are deployed by digest** (core `TODO.md` → T-701; v1.0 review findings RELEASE-001 / IMG-012). `230-image-update` now requires the core manifest's `digests{}` and composes the pinned reference `docker.io/<ns>/cna:<role>-sha-<7>@sha256:<digest>` for the api, worker, web and migrator images — the tag stays for people and for the web tier's image-update check, the digest is what the platform pulls — and passes all four to `210` (new `migrator_image` input). A manifest without `digests{}` fails the update with a message to rebuild the core first. `210-deploy` refuses any empty or floating (`*-latest`) reference, drops the `migrator-latest` default and the never-working "resolve from the appliance's own build manifest" step, validates every image input with one shared `validate_image_ref` function (pinned accepted, tag-only accepted with a warning, anything else refused), and records the pinned references in the release catalog. Rollback takes `previous_migrator_image` through `workflow_call`; a dispatch rollback resolves the migrator from the catalog record that matches `previous_api_image` (GitHub caps `workflow_dispatch` at ten inputs). `220-fast-redeploy` applies the same validation; `350`/`360` no longer fall back to floating tags when the catalog has no image (they fail instead); `100-validate-prereqs` checks Docker Hub pull access with an authenticated tags listing rather than by pulling `*-latest`. Terraform image variables lose their `example-namespace/*-latest` module defaults and document the pinned form. Shared change — `230`, `resolve_rollback_target.py`, `validate_image_ref` and the `update-available` issue template are byte-identical in the sibling appliance.
 
+### Removed
+- **The worker service and every worker image input** (core `REVIEW.md` R-016, core `TODO.md` T-725,
+  this repository's `TODO.md` → T-118). The core retired the `cna-worker` image, a run-once placeholder
+  superseded by `POST /publish` in `cna-api`, and its `latest-build.json` no longer carries `worker`;
+  `230`'s guard required `.images.worker` and failed on every run. Removed: the worker ECS task
+  definition, service and autoscaling target and policies; the worker log group (from Terraform state
+  only; see below), metric filters
+  (`*-worker-errors`, `*-worker-task-duration`), error-rate alarm and ECS CPU/memory alarms; the
+  `worker_image` Terraform variable, the worker env/secret maps and the `enable_scale_to_zero` variable,
+  which only collapsed the worker; the `worker_image` and `previous_worker_image` inputs of `210-deploy`
+  and the `worker_image` input of `220-fast-redeploy` (a coordinated input-contract change, identical in
+  the Azure appliance); the worker leg of `230`, `330`, `350` and `360`; `EFFECTIVE_WORKER_IMAGE` from
+  `resolve_rollback_target.py`, which still accepts older release-catalog records that carry
+  `worker_image`. `230` accepts a manifest with or without `worker`; `210` and `220` no longer take a
+  worker input. The worker log
+  group is an `aws_cloudwatch_log_group`, a type `210`'s destructive-plan guard refuses to delete, so
+  each workload root carries a `removed` block with `lifecycle { destroy = false }`: the group leaves
+  state as `forget`, not `delete`, and its logs expire on their retention. This supersedes the AWS-F-08
+  entry above (`210` now rolls only web and API). New regression tests: `230` accepts manifests with
+  and without `worker`, nothing in the workflows, CI scripts or Terraform references a worker except
+  that `removed` block, the destructive-plan guard lets a `forget` through, and the rollback resolver
+  (`scripts/ci/test_resolve_rollback_target.py`, now run by `300-validate`) ignores `worker_image`.
+  Shared change: `230-image-update.yml`, `resolve_rollback_target.py`, its test and the
+  `update-available` issue template are byte-identical in the Azure appliance.
+
 ### Security
 - **`230-image-update.yml` is byte-identical in both appliances** (AWS `TODO.md` → T-117). The two
   copies had drifted by about 40 lines while enforcing the same policy. The upstream-source check is now

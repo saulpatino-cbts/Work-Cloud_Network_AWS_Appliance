@@ -4,7 +4,7 @@
 
 This repository deploys and operates the **Cloud Network Assessment platform on AWS**.
 It contains the AWS Terraform and the workflows that deploy, update, watch and tear
-down an environment — and nothing else. The application itself (web, API, worker, CLI) lives in
+down an environment — and nothing else. The application itself (web, API, CLI) lives in
 the **core** repository, [`Work-Cloud_Network_Core`](https://github.com/saulpatino-cbts/Work-Cloud_Network_Core),
 which builds the container images this appliance runs. Features ship once, in those images; this
 appliance picks them up.
@@ -258,7 +258,7 @@ the application's AI Engine page, never GitHub or Terraform.
      database. Existing AWS BYO deployments fail closed until the allowlist is configured and
      applied to both web and api. The allowlist does not restrict outbound SDK traffic through NAT.
 
-   The four image inputs (`api_image`, `worker_image`, `web_image`, `migrator_image`) are pinned
+   The three image inputs (`api_image`, `web_image`, `migrator_image`) are pinned
    references — `docker.io/<ns>/cna:<role>-sha-<7>@sha256:<digest>` — supplied by `230 · Image
    Update`, or copied from the core's `.deployment-catalog/latest-build.json` (`images.<role>` +
    `digests.<role>`) or from the `update-available` issue. Floating tags (`*-latest`) and tag-only
@@ -274,9 +274,9 @@ the application's AI Engine page, never GitHub or Terraform.
 On a cold apply, Terraform waits for the API ECS service to reach steady state before creating
 the web ECS service that uses its Service Connect name. This reduces the startup race, but does
 not prove live DNS propagation or first-request behavior; confirm the first deployment's web logs
-and application health in the customer account. Dev's worker may scale to zero; `210` wakes
-web, API, and worker services to one task for rollout verification, then waits for service
-stability. Verification does not require the worker to remain above zero afterward.
+and application health in the customer account. The web and API services always keep at least
+one task; `210` rolls both to pick up updated secrets (waking either one to a single task if it was
+scaled to zero by hand), then waits for service stability.
 
 Flipping `ai_mode` on a live environment destroys or creates the cloud AI resources — record the
 decision in `REVIEW.md` first.

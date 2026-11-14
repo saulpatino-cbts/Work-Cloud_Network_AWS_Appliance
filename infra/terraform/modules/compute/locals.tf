@@ -1,15 +1,13 @@
 locals {
   cluster_name = "${var.name_prefix}-cluster"
 
-  api_service_name    = "${var.name_prefix}-api"
-  worker_service_name = "${var.name_prefix}-worker"
-  web_service_name    = "${var.name_prefix}-web"
+  api_service_name = "${var.name_prefix}-api"
+  web_service_name = "${var.name_prefix}-web"
 
   # Container names are load-bearing: the service load_balancer block references
   # them, so they must match the container_definitions name exactly.
-  api_container_name    = "cna-api"
-  worker_container_name = "cna-worker"
-  web_container_name    = "cna-web"
+  api_container_name = "cna-api"
+  web_container_name = "cna-web"
 
   # HTTPS listener exists only when a cert ARN is supplied — an ACM cert is
   # created/validated externally (spec §12.2).
@@ -21,23 +19,20 @@ locals {
   api_discovery_name = "api"
   api_internal_url   = "http://${local.api_discovery_name}:${var.api_target_port}"
 
-  # FinOps: enable_scale_to_zero collapses only the worker. The api and web
-  # services are target-tracking scaled and cannot come back from zero (no
-  # metric datapoints without tasks), so their floor is always at least one.
-  api_desired_count    = max(1, var.api_min_count)
-  worker_desired_count = var.enable_scale_to_zero ? 0 : var.worker_min_count
-  web_desired_count    = max(1, var.web_min_count)
+  # The api and web services are target-tracking scaled and cannot come back
+  # from zero (no metric datapoints without tasks), so their floor is always
+  # at least one task.
+  api_desired_count = max(1, var.api_min_count)
+  web_desired_count = max(1, var.web_min_count)
 
   # Container-definition env/secret shapes derived from the input maps.
-  api_environment    = [for k, v in var.api_environment : { name = k, value = v }]
-  worker_environment = [for k, v in var.worker_environment : { name = k, value = v }]
+  api_environment = [for k, v in var.api_environment : { name = k, value = v }]
   web_environment = [
     for k, v in merge(var.web_environment, { CNA_API_INTERNAL_URL = local.api_internal_url }) : { name = k, value = v }
   ]
 
-  api_secrets    = [for k, arn in var.api_secrets : { name = k, valueFrom = arn }]
-  worker_secrets = [for k, arn in var.worker_secrets : { name = k, valueFrom = arn }]
-  web_secrets    = [for k, arn in var.web_secrets : { name = k, valueFrom = arn }]
+  api_secrets = [for k, arn in var.api_secrets : { name = k, valueFrom = arn }]
+  web_secrets = [for k, arn in var.web_secrets : { name = k, valueFrom = arn }]
 
   repository_credentials = var.dockerhub_secret_arn != null ? { credentialsParameter = var.dockerhub_secret_arn } : null
 

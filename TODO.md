@@ -6,11 +6,11 @@ in the core repository's `TODO.md`; this file covers deployment, operations and 
 Items requiring external input — an approval, an account, a credential, an access grant — belong
 in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
-**Last reviewed:** 2026-11-06
+**Last reviewed:** 2026-11-13
 
 | Phase | Theme | Items |
 |---|---|---|
-| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-117 |
+| [Phase 1](#phase-1--bring-up) | Bring-up | T-101 – T-119 |
 
 ---
 
@@ -218,8 +218,10 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   > client portal do not function on AWS until the core gains an S3 path.
   > **² Scale-to-zero — not full parity, by design.** AWS cannot scale the api
   > and web services from zero (target-tracking autoscaling needs datapoints), so
-  > their floor is `max(1, min_count)`; only the worker truly scales to zero.
-  > Azure Container Apps scales all three to zero. (review AWS-F-17)
+  > their floor is `max(1, min_count)`. The worker, the only service that scaled
+  > to zero, was retired with the `cna-worker` image (core `REVIEW.md` R-016,
+  > T-118), and the `enable_scale_to_zero` variable went with it, so nothing on
+  > AWS scales to zero. Azure Container Apps scales its apps to zero. (review AWS-F-17)
 
 ### T-109 — Optional Route 53 + ACM certificate validation flow
 
@@ -308,7 +310,7 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **LOW** `infra/terraform/environments/{dev,prod}/platform/main.tf` (`terraform-aws:ecr-endpoints-unused`) — Added 2026-09-23 while working this item. The two ECR interface endpoints (`ecr.api`, `ecr.dkr`) served nothing: the appliance pulls its images from Docker Hub and the X-Ray daemon from ECR Public, neither of which a private ECR endpoint carries, so they were pure hourly cost per AZ. *Done: both are behind a new `enable_ecr_endpoints` variable, default `false`; T-105's endpoint table records the change.*
 - **INFORMATIONAL** `infra/terraform/environments/aws` (`terraform-aws:validate-result`) — Verified compliant (Requirements 4.2/4.3): ran 'terraform fmt -check' (clean), 'terraform init -backend=false' (backend init skipped — S3 state backend is gated on R-002), and 'terraform validate' on every AWS root — infra/terraform/environments/dev/platform, infra/terraform/environments/dev/workload, infra/terraform/environments/prod/platform, infra/terraform/environments/prod/workload. Two account-independent validate errors were fixed in-tree by this task: the runtime name_prefix variable description had an unescaped ${name_prefix} interpolation (escaped to $${name_prefix}), and aws_bedrock_inference_profile.chat set the read-only 'type' attribute (removed). After the fixes all four roots validate successfully. No live 'terraform apply' or account 'plan' was run (Requirement 4.6).
 - **INFORMATIONAL** `infra/terraform/modules/ai` (`terraform-aws:module-audited:ai`) — Verified compliant: Bedrock invoke policy is scoped to the configured foundation-model / inference-profile ARNs (no bedrock:* wildcard), guardrail + inference profile are optional and tagged.
-- **INFORMATIONAL** `infra/terraform/modules/compute` (`terraform-aws:module-audited:compute`) — Verified compliant: ECS Fargate tasks run in private subnets (assign_public_ip=false), have healthchecks, awslogs logging, container-insights on, autoscaling with scale-to-zero, and the ALB redirects HTTP→HTTPS. ALB drop_invalid_header_fields added by 7.1.
+- **INFORMATIONAL** `infra/terraform/modules/compute` (`terraform-aws:module-audited:compute`) — Verified compliant: ECS Fargate tasks run in private subnets (assign_public_ip=false), have healthchecks, awslogs logging, container-insights on, autoscaling with scale-to-zero (worker only; the worker and the scale-to-zero path were retired with core R-016, T-118), and the ALB redirects HTTP→HTTPS. ALB drop_invalid_header_fields added by 7.1.
 - **INFORMATIONAL** `infra/terraform/modules/database` (`terraform-aws:module-audited:database`) — Verified compliant: RDS is not publicly accessible, storage is KMS-encrypted, backups + final-snapshot + deletion-protection are environment-driven, postgresql logs export to CloudWatch, password is sensitive and ignored after create. *Still true; Performance Insights, enhanced monitoring and IAM authentication are now environment-driven too.*
 - **INFORMATIONAL** `infra/terraform/modules/identity` (`terraform-aws:module-audited:identity`) — Verified compliant: KMS key rotation on; ECS execution/task roles are name-prefix-scoped to their secrets/buckets/KMS; OIDC subject is pinned to the repo. Broad deploy-write policy is recorded as a gated (R-003) tightening follow-up.
 - **INFORMATIONAL** `infra/terraform/modules/observability` (`terraform-aws:module-audited:observability`) — Verified compliant: CloudWatch log groups are KMS-encrypted with retention; X-Ray sampling, metric filters, and baseline alarms are present. Alarms SNS topic encryption added by 7.1.
@@ -350,7 +352,7 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **Priority:** Medium
 - **Description:** The Azure workload roots pass `CNA_AZURE_MCP_ENDPOINT`,
   `CNA_AZURE_MCP_TRANSPORT`, `CNA_AWS_MCP_ENDPOINT`, `CNA_AWS_MCP_TRANSPORT` and
-  `CNA_DRAWIO_MCP_URL` to the api and worker containers (from `azure_mcp_*`, `aws_mcp_*` and
+  `CNA_DRAWIO_MCP_URL` to the web container (from `azure_mcp_*`, `aws_mcp_*` and
   `drawio_mcp_url` variables). Both AWS workload roots omit all five, so on AWS the recommendation
   engine's direct MCP clients and draw.io rendering fall back to their code defaults (offline
   library, `localhost`). This predates the split — the gap is in the original repository's
@@ -358,8 +360,8 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
 - **Dependencies:** none for the Terraform; T-108 to verify against a live deployment.
 - **Recommended action:** Add the five variables to `environments/{dev,prod}/workload/variables.tf`
   with the same names, defaults and descriptions as the Azure sibling, pass them in the same
-  `environment` map the Azure roots do (the web tier's — the Azure roots do not pass them to api
-  or worker either), and surface them in `210-deploy` exactly as Azure's `210` does. Cloud-specific
+  `environment` map the Azure roots do (the web tier's — the Azure roots do not pass them to the
+  api either), and surface them in `210-deploy` exactly as Azure's `210` does. Cloud-specific
   file bodies only; no shared-file change.
 - **Status:** Done 2026-09-23 for Terraform and completed with T-101: both workload plan paths in
   `210-deploy` now pass `azure_mcp_endpoint`, `azure_mcp_transport`, `aws_mcp_endpoint`,
@@ -443,3 +445,58 @@ in [`REVIEW.md`](REVIEW.md), not here. Completed work is recorded in [`CHANGELOG
   `scripts/ci/` and `300-validate` differences are cloud-specific (Azure runner-firewall windows,
   `validate_client_config.sh`, BYO egress `terraform test`; AWS account-isolation guards) and are
   intentionally not unified.
+
+### T-118 — Retire the worker service (core `REVIEW.md` R-016, core `TODO.md` T-725)
+- **Priority:** High — `230-image-update` fails every run until this merges.
+- **Description:** The core deleted `apps/cna-worker` (a run-once placeholder superseded by
+  `POST /publish` in `cna-api`) and stopped publishing `cna:worker-sha-<7>`; since 2026-11-12 its
+  `latest-build.json` has no `worker` key in `images{}` or `digests{}`. `230`'s guard
+  (`jq -e '.sha_tag and .images.api and .images.worker and .images.web'`) therefore failed at the
+  detect step on every run. This change removes the worker from the appliance: the ECS task
+  definition, service and autoscaling target and policies (`modules/compute`), the worker log
+  group, its two metric filters, its error-rate alarm and its ECS CPU/memory alarms
+  (`modules/observability`), the `worker_image` root variable, the worker env/secret maps and the
+  `enable_scale_to_zero` variable that only collapsed the worker; the `worker_image` and
+  `previous_worker_image` inputs of `210`, the `worker_image` input of `220`, the worker leg of
+  `230`, `330`, `350` and `360`, and the worker output of `resolve_rollback_target.py` (which still
+  accepts older release-catalog records that carry `worker_image`). `230` accepts a manifest with or
+  without `worker`; `210` and `220` no longer take a worker input.
+- **Protected log group:** `210` refuses any plan that deletes an `aws_cloudwatch_log_group`
+  (`scripts/ci/refuse_destructive_plan.py`). Each workload root therefore carries a `removed` block
+  with `lifecycle { destroy = false }` for `module.observability.aws_cloudwatch_log_group.worker`: the
+  plan shows it as `forget`, not `delete`, the group leaves state, and its logs stay until their
+  retention expires. The block is a no-op where the group was never created. Delete the block after
+  every environment that ever applied has applied it once.
+- **Human steps (agents never apply):**
+  1. Merge order: the core change (core PR #120) already merged on 2026-11-12 13:59 UTC, and
+     `230` has failed on every run since. Merge this appliance and the Azure appliance together:
+     they carry the same `210`/`220` input contract.
+  2. No AWS environment has a release catalog yet (`.deployment-catalog/{dev,prod}/` hold only
+     `.gitkeep`; T-105 and T-106 are blocked), so there is probably no live worker to destroy. If an
+     environment was applied anyway, its next `210-deploy` destroys the worker service, task
+     definition, autoscaling and alarms and forgets the log group. Review that plan: nothing else may
+     be destroyed.
+  3. dev: `AUTO_UPDATE_DEV` is `False` (observed 2026-11-11), so dev is not auto-applied. Run
+     `210-deploy` for dev by hand after reviewing the plan.
+  4. prod: run `210-deploy` for prod; the apply waits for the `hub` environment's required reviewer.
+  5. Optional cleanup: once its retention has passed, delete the forgotten, now-unmanaged log group
+     `/ecs/<name_prefix>/worker` by hand.
+  6. Until step 3 or 4 has run, `350`/`360` report drift for an environment that still holds the
+     worker in state; that is expected.
+- **Status:** Prepared 2026-11-13 on branch `work/retire-cna-worker`; not merged, not applied.
+
+### T-119 — The dispatch-dialog rollback cannot reach the rollback-target resolver (shared with Azure)
+- **Priority:** Medium — a rollback still works when the operator pastes both `previous_*_image`
+  references; only the "leave them empty and let the catalog decide" path is dead.
+- **Description:** `210-deploy.yml` runs `scripts/ci/resolve_rollback_target.py` in the plan job only
+  when `previous_api_image` or `previous_web_image` is empty (`if:` near line 545), but the earlier
+  policy-gates step exits 1 when either of them is empty (near line 235). The resolver is therefore
+  unreachable from the `workflow_dispatch` dialog, although comments describe it as the dialog's
+  fallback. The Azure appliance has the same shape (its own TODO item). Found by the independent
+  review of T-118 (2026-11-13); pre-existing, not introduced by T-118.
+- **Recommended action:** decide one behaviour for both appliances in one change set — either let
+  policy-gates defer to the resolver when both `previous_*_image` fields are empty (and fail only if
+  it finds no approved record), or drop the resolver step and the comments that promise it. Add a
+  regression test in `test_workflow_regressions.py` either way; keep `resolve_rollback_target.py`
+  byte-identical between the appliances.
+- **Status:** Open.

@@ -86,41 +86,6 @@ resource "aws_ecs_task_definition" "api" {
   tags = merge(var.tags, { Name = local.api_service_name })
 }
 
-resource "aws_ecs_task_definition" "worker" {
-  family                   = local.worker_service_name
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = var.worker_cpu
-  memory                   = var.worker_memory
-  execution_role_arn       = var.task_execution_role_arn
-  task_role_arn            = var.task_role_arn
-
-  container_definitions = jsonencode(compact([
-    jsonencode(merge(
-      {
-        name        = local.worker_container_name
-        image       = var.worker_image
-        essential   = true
-        environment = concat(local.worker_environment, local.xray_env_var)
-        secrets     = local.worker_secrets
-
-        logConfiguration = {
-          logDriver = "awslogs"
-          options = {
-            "awslogs-group"         = var.worker_log_group_name
-            "awslogs-region"        = var.aws_region
-            "awslogs-stream-prefix" = "worker"
-          }
-        }
-      },
-      local.repository_credentials != null ? { repositoryCredentials = local.repository_credentials } : {}
-    )),
-    local.xray_sidecar != null ? jsonencode(local.xray_sidecar) : "",
-  ]))
-
-  tags = merge(var.tags, { Name = local.worker_service_name })
-}
-
 resource "aws_ecs_task_definition" "web" {
   family                   = local.web_service_name
   network_mode             = "awsvpc"
@@ -237,8 +202,8 @@ resource "aws_lb_listener" "https" {
 # ─── Service Connect (private web → api path) ─────────────────────────────────
 # Cloud Map HTTP namespace the api publishes itself into and the web tasks
 # resolve from. The api is reachable as http://api:<api_target_port> from any
-# task whose service is a Service Connect client in this namespace (web only —
-# the worker is not enrolled). Replaces the former public ALB path rule for the
+# task whose service is a Service Connect client in this namespace (web only).
+# Replaces the former public ALB path rule for the
 # api, which exposed /health, /metrics, /chat and /api/v1/* to the internet.
 resource "aws_service_discovery_http_namespace" "this" {
   name        = var.name_prefix
@@ -312,24 +277,6 @@ resource "aws_ecs_service" "api" {
   depends_on = [aws_vpc_security_group_ingress_rule.app_to_api]
 }
 
-resource "aws_ecs_service" "worker" {
-  name            = local.worker_service_name
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.worker.arn
-  desired_count   = local.worker_desired_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = var.app_subnet_ids
-    security_groups  = [var.app_security_group_id]
-    assign_public_ip = false
-  }
-
-  lifecycle {
-    ignore_changes = [desired_count]
-  }
-}
-
 resource "aws_ecs_service" "web" {
   name            = local.web_service_name
   cluster         = aws_ecs_cluster.this.id
@@ -382,8 +329,7 @@ resource "aws_ecs_service" "web" {
 # Application Auto Scaling — mirrors Azure Container Apps' min/max replica
 # scaling with target tracking on CPU and memory (plus ALB requests for web).
 # Target tracking cannot scale a service out from zero (no datapoints with no
-# tasks), so the api and web floors never drop below one task; only the worker
-# honours enable_scale_to_zero.
+# tasks), so the api and web floors never drop below one task.
 # =============================================================================
 
 # ─── API service autoscaling ──────────────────────────────────────────────────
@@ -424,55 +370,6 @@ resource "aws_appautoscaling_policy" "api_memory" {
   resource_id        = aws_appautoscaling_target.api[0].resource_id
   scalable_dimension = aws_appautoscaling_target.api[0].scalable_dimension
   service_namespace  = aws_appautoscaling_target.api[0].service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
-    }
-    target_value       = var.autoscaling_memory_target_percent
-    scale_in_cooldown  = var.autoscaling_scale_in_cooldown
-    scale_out_cooldown = var.autoscaling_scale_out_cooldown
-  }
-}
-
-# ─── Worker service autoscaling ───────────────────────────────────────────────
-resource "aws_appautoscaling_target" "worker" {
-  count = var.enable_autoscaling ? 1 : 0
-
-  max_capacity       = var.worker_max_count
-  min_capacity       = local.worker_desired_count
-  resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.worker.name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-}
-
-resource "aws_appautoscaling_policy" "worker_cpu" {
-  count = var.enable_autoscaling ? 1 : 0
-
-  name               = "${local.worker_service_name}-cpu-scaling"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.worker[0].resource_id
-  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
-  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageCPUUtilization"
-    }
-    target_value       = var.autoscaling_cpu_target_percent
-    scale_in_cooldown  = var.autoscaling_scale_in_cooldown
-    scale_out_cooldown = var.autoscaling_scale_out_cooldown
-  }
-}
-
-resource "aws_appautoscaling_policy" "worker_memory" {
-  count = var.enable_autoscaling ? 1 : 0
-
-  name               = "${local.worker_service_name}-memory-scaling"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.worker[0].resource_id
-  scalable_dimension = aws_appautoscaling_target.worker[0].scalable_dimension
-  service_namespace  = aws_appautoscaling_target.worker[0].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {

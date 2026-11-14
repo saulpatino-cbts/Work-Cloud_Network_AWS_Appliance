@@ -2,7 +2,7 @@
 # Observability — ECS log groups, X-Ray tracing, Contributor Insights, metric
 # filters, and baseline alarms. Mirrors the Azure observability module (App
 # Insights + diagnostic settings + VNet flow logs). Created BEFORE the compute
-# module, which consumes the three log-group names and the X-Ray daemon config.
+# module, which consumes the two log-group names and the X-Ray daemon config.
 # =============================================================================
 
 # ─── ECS service log groups ───────────────────────────────────────────────────
@@ -12,14 +12,6 @@ resource "aws_cloudwatch_log_group" "api" {
   kms_key_id        = var.kms_key_arn
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-api-logs" })
-}
-
-resource "aws_cloudwatch_log_group" "worker" {
-  name              = local.worker_log_group_name
-  retention_in_days = var.log_retention_days
-  kms_key_id        = var.kms_key_arn
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-worker-logs" })
 }
 
 resource "aws_cloudwatch_log_group" "web" {
@@ -115,32 +107,6 @@ resource "aws_cloudwatch_log_metric_filter" "web_errors" {
   }
 }
 
-resource "aws_cloudwatch_log_metric_filter" "worker_errors" {
-  name           = "${var.name_prefix}-worker-errors"
-  pattern        = "{ $.level = \"ERROR\" }"
-  log_group_name = aws_cloudwatch_log_group.worker.name
-
-  metric_transformation {
-    name          = "WorkerErrors"
-    namespace     = local.custom_metric_namespace
-    value         = "1"
-    default_value = "0"
-  }
-}
-
-resource "aws_cloudwatch_log_metric_filter" "worker_task_duration" {
-  name           = "${var.name_prefix}-worker-task-duration"
-  pattern        = "{ $.task_duration_ms = * }"
-  log_group_name = aws_cloudwatch_log_group.worker.name
-
-  metric_transformation {
-    name          = "WorkerTaskDurationMs"
-    namespace     = local.custom_metric_namespace
-    value         = "$.task_duration_ms"
-    default_value = "0"
-  }
-}
-
 # ─── Application error rate alarm ─────────────────────────────────────────────
 resource "aws_cloudwatch_metric_alarm" "api_error_rate" {
   count = var.enable_alarms ? 1 : 0
@@ -158,24 +124,6 @@ resource "aws_cloudwatch_metric_alarm" "api_error_rate" {
   ok_actions          = local.alarm_actions
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-api-error-rate-high" })
-}
-
-resource "aws_cloudwatch_metric_alarm" "worker_error_rate" {
-  count = var.enable_alarms ? 1 : 0
-
-  alarm_name          = "${var.name_prefix}-worker-error-rate-high"
-  namespace           = local.custom_metric_namespace
-  metric_name         = "WorkerErrors"
-  comparison_operator = "GreaterThanThreshold"
-  threshold           = var.alarm_thresholds.worker_error_count
-  evaluation_periods  = 2
-  period              = 300
-  statistic           = "Sum"
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = local.alarm_actions
-  ok_actions          = local.alarm_actions
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-worker-error-rate-high" })
 }
 
 # ─── ALB latency alarm (p99) ──────────────────────────────────────────────────

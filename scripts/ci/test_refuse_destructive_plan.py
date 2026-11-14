@@ -43,6 +43,14 @@ class DestructivePlanTests(unittest.TestCase):
     def test_protected_type_update_allowed(self):
         self.assertEqual(self.run_guard(DATABASE, "aws_db_instance", ["update"]).returncode, 0)
 
+    def test_protected_type_forget_allowed(self):
+        # A `removed { lifecycle { destroy = false } }` block plans as "forget":
+        # the object leaves state and survives, so the guard must let it through
+        # (the retired worker's log group leaves state this way, core R-016).
+        address = "module.observability.aws_cloudwatch_log_group.worker"
+        result = self.run_guard(address, "aws_cloudwatch_log_group", ["forget"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unprotected_type_delete_allowed(self):
         result = self.run_guard("module.network.aws_flow_log.this", "aws_flow_log", ["delete"])
         self.assertEqual(result.returncode, 0, result.stderr)

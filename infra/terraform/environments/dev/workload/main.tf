@@ -90,6 +90,22 @@ module "observability" {
   kms_key_arn        = module.identity.kms_key_arn
 }
 
+# The worker service was retired with the cna-worker image (core REVIEW.md
+# R-016). Its log group is an aws_cloudwatch_log_group, a type 210-deploy's
+# refuse_destructive_plan.py guard protects, so a plain removal would make
+# every apply refuse. This block takes it out of state without deleting it:
+# the plan shows "forget", not "delete"; the logs stay readable and expire on
+# their retention; the empty group is left for a human to delete by hand.
+# A no-op where the group was never created. Delete this block once every
+# environment has applied it.
+removed {
+  from = module.observability.aws_cloudwatch_log_group.worker
+
+  lifecycle {
+    destroy = false
+  }
+}
+
 # ─── Runtime (Secrets Manager) ────────────────────────────────────────────────
 module "runtime" {
   source = "../../../modules/runtime"
@@ -125,21 +141,18 @@ module "compute" {
   task_execution_role_arn = module.identity.task_execution_role_arn
   task_role_arn           = module.identity.task_role_arn
 
-  alb_certificate_arn  = var.alb_certificate_arn
-  enable_scale_to_zero = var.enable_scale_to_zero
-  enable_autoscaling   = true
+  alb_certificate_arn = var.alb_certificate_arn
+  enable_autoscaling  = true
 
   # X-Ray tracing (mirrors Azure Application Insights)
   enable_xray         = var.enable_xray
   xray_log_group_name = module.observability.xray_log_group_name != null ? module.observability.xray_log_group_name : ""
 
-  api_image    = var.api_image
-  worker_image = var.worker_image
-  web_image    = var.web_image
+  api_image = var.api_image
+  web_image = var.web_image
 
-  api_log_group_name    = module.observability.api_log_group_name
-  worker_log_group_name = module.observability.worker_log_group_name
-  web_log_group_name    = module.observability.web_log_group_name
+  api_log_group_name = module.observability.api_log_group_name
+  web_log_group_name = module.observability.web_log_group_name
 
   dockerhub_secret_arn = module.runtime.dockerhub_secret_arn
 
@@ -154,15 +167,6 @@ module "compute" {
     local.bedrock_env_vars,
     local.ai_mode_env_vars,
     local.byo_ai_env_vars,
-  )
-
-  worker_environment = merge(
-    {
-      CNA_STORAGE_BUCKET = module.storage.artifacts_bucket_id
-      AWS_REGION         = var.region
-    },
-    local.bedrock_env_vars,
-    local.ai_mode_env_vars,
   )
 
   # CNA_API_INTERNAL_URL (http://api:<port> over Service Connect) is added by
@@ -198,10 +202,6 @@ module "compute" {
     },
     local.ai_saas ? {} : { CREDENTIAL_ENCRYPTION_KEY = module.runtime.credential_encryption_key_secret_arn },
   )
-
-  worker_secrets = {
-    DATABASE_URL = module.runtime.database_url_secret_arn
-  }
 
   web_secrets = merge(
     {

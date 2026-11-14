@@ -64,7 +64,6 @@ variable "alarm_thresholds" {
     alb_5xx_count           = optional(number, 10)
     alb_latency_p99_seconds = optional(number, 5)
     api_error_count         = optional(number, 20)
-    worker_error_count      = optional(number, 10)
   })
   default  = {}
   nullable = false

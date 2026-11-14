@@ -293,7 +293,6 @@ jobs:
             echo "$FALLBACK"
           }
           API_IMAGE=$(catalog_value '.api_image' "docker.io/${DOCKERHUB_NAMESPACE}/cna:api-latest")
-          WORKER_IMAGE=$(catalog_value '.worker_image' "docker.io/${DOCKERHUB_NAMESPACE}/cna:worker-latest")
           WEB_IMAGE=$(catalog_value '.web_image' "docker.io/${DOCKERHUB_NAMESPACE}/cna:web-latest")
           AI_MODE=$(catalog_value '.ai_mode' "saas")
           source "$GITHUB_WORKSPACE/scripts/ci/resolve_byo_ai_config.sh"
@@ -317,7 +316,6 @@ jobs:
             -var="app_security_group_id=$(tf_out app_security_group_id)" \
             -var="database_security_group_id=$(tf_out database_security_group_id)" \
             -var="api_image=${API_IMAGE}" \
-            -var="worker_image=${WORKER_IMAGE}" \
             -var="web_image=${WEB_IMAGE}" \
             -var="entra_tenant_id=${ENTRA_TENANT_ID}" \
             -var="entra_client_id=${ENTRA_CLIENT_ID}" \

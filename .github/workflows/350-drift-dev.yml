@@ -235,9 +235,8 @@ jobs:
           # Images have no fallback: a floating tag is not something drift can
           # be measured against, so a catalog without an image fails the check.
           API_IMAGE=$(catalog_value '.api_image' "")
-          WORKER_IMAGE=$(catalog_value '.worker_image' "")
           WEB_IMAGE=$(catalog_value '.web_image' "")
-          for PAIR in "api=$API_IMAGE" "worker=$WORKER_IMAGE" "web=$WEB_IMAGE"; do
+          for PAIR in "api=$API_IMAGE" "web=$WEB_IMAGE"; do
             if [ -z "${PAIR#*=}" ]; then
               echo "::error::release catalog has no image for ${PAIR%%=*}; drift cannot be measured against a floating tag"
               exit 1
@@ -281,7 +280,6 @@ jobs:
             -var="app_security_group_id=$(tf_out app_security_group_id)" \
             -var="database_security_group_id=$(tf_out database_security_group_id)" \
             -var="api_image=${API_IMAGE}" \
-            -var="worker_image=${WORKER_IMAGE}" \
             -var="web_image=${WEB_IMAGE}" \
             -var="entra_tenant_id=${ENTRA_TENANT_ID}" \
             -var="entra_client_id=${ENTRA_CLIENT_ID}" \
