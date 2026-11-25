@@ -37,7 +37,7 @@ locals {
   # and falls back to the configured foundation-model or system-profile ARN.
   bedrock_inference_profile_arn = one(module.ai[*].inference_profile_arn)
   bedrock_env_vars = local.ai_saas ? {
-    CNA_BEDROCK_MODEL_ID              = one(module.ai[*].chat_model_arn)
+    CNA_BEDROCK_MODEL_ID              = local.bedrock_inference_profile_arn != null ? local.bedrock_inference_profile_arn : one(module.ai[*].chat_model_arn)
     CNA_BEDROCK_INFERENCE_PROFILE_ARN = local.bedrock_inference_profile_arn != null ? local.bedrock_inference_profile_arn : ""
   } : {}
 }
