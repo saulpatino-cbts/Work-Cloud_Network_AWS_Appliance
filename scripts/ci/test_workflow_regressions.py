@@ -150,6 +150,31 @@ class WorkflowRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(found, 4)
 
 
+class ServiceConnectOrderingTests(unittest.TestCase):
+    def terraform_resource_body(self, resource_type, resource_name):
+        text = (TERRAFORM / "modules" / "compute" / "main.tf").read_text(encoding="utf-8")
+        marker = f'resource "{resource_type}" "{resource_name}" {{'
+        start = text.index(marker) + len(marker)
+        depth = 1
+        for index in range(start, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:index]
+        self.fail(f"unterminated Terraform resource {resource_type}.{resource_name}")
+
+    def test_web_waits_for_api_service_connect_registration(self):
+        api = self.terraform_resource_body("aws_ecs_service", "api")
+        web = self.terraform_resource_body("aws_ecs_service", "web")
+
+        self.assertRegex(api, r"(?m)^\s*wait_for_steady_state\s*=\s*true\s*$")
+        depends_on = re.search(r"depends_on\s*=\s*\[(.*?)\]", web, re.DOTALL)
+        self.assertIsNotNone(depends_on, "web service must explicitly depend on the API service")
+        self.assertIn("aws_ecs_service.api", depends_on.group(1))
+
+
 class RetiredWorkerTests(unittest.TestCase):
     """The cna-worker image is retired (core REVIEW.md R-016); nothing may deploy one again."""
 
