@@ -150,6 +150,28 @@ class WorkflowRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(found, 4)
 
 
+class BedrockRuntimeContractTests(unittest.TestCase):
+    def test_workload_uses_application_profile_as_primary_bedrock_model_id(self):
+        for environment in ("dev", "prod"):
+            with self.subTest(environment=environment):
+                text = (
+                    TERRAFORM / "environments" / environment / "workload" / "locals.tf"
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    "CNA_BEDROCK_MODEL_ID              = "
+                    "local.bedrock_inference_profile_arn != null "
+                    "? local.bedrock_inference_profile_arn : "
+                    "one(module.ai[*].chat_model_arn)",
+                    text,
+                )
+                self.assertIn(
+                    "CNA_BEDROCK_INFERENCE_PROFILE_ARN = "
+                    "local.bedrock_inference_profile_arn != null "
+                    "? local.bedrock_inference_profile_arn : \"\"",
+                    text,
+                )
+
+
 class RetiredWorkerTests(unittest.TestCase):
     """The cna-worker image is retired (core REVIEW.md R-016); nothing may deploy one again."""
 

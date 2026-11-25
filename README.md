@@ -119,9 +119,10 @@ or files.
   Bedrock model/Region documentation. Supply a model ID only when it supports on-demand inference
   in the selected Region; for a profile-only model supply its exact system-defined inference
   profile ARN. The deployment creates an application inference profile from that source by
-  default, and the app prefers the created profile ARN over the source ARN. No model ID is
-  hard-coded as a client default. Confirm model access and cross-Region implications with the
-  account owner before deployment; `210`'s in-environment probe is the live acceptance check.
+  default and injects its ARN as `CNA_BEDROCK_MODEL_ID`; the source ARN remains the fallback when
+  profile creation is disabled. No model ID is hard-coded as a client default. Confirm model
+  access and cross-Region implications with the account owner before deployment; `210`'s
+  in-environment probe is the live acceptance check.
 - An ACM certificate in the deployment account and Region for the ALB. The optional custom domain
   requires a matching CloudFront certificate in `us-east-1`. Without the ALB certificate the
   HTTPS-only CloudFront-to-ALB origin cannot serve requests (502); obtain and validate certificates
@@ -246,9 +247,9 @@ the application's AI Engine page, never GitHub or Terraform.
    - **`saas`** — also set the environment variable `CNA_BEDROCK_MODEL_ID` to a customer-selected
      Bedrock model ID that supports on-demand inference in the target Region, or to the exact ARN
      of a system-defined inference profile if the model is profile-only. Terraform creates an
-     application inference profile from that source by default; the app invokes its ARN. The
-     fallback source ARN is still passed as `CNA_BEDROCK_MODEL_ID`. No model is assumed by this
-     repository. Review current [model and inference-profile Region support](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html)
+     application inference profile from that source by default and passes its ARN to the app as
+     `CNA_BEDROCK_MODEL_ID`. The source ARN is used only when profile creation is disabled. No
+     model is assumed by this repository. Review current [model and inference-profile Region support](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html)
      and [inference-profile invocation requirements](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html)
      before configuring. Account model access is still an owner prerequisite.
    - **`byo-api`** — only after Security resolves `REVIEW.md` R-006 and the required non-empty
