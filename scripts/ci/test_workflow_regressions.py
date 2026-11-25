@@ -153,6 +153,31 @@ class WorkflowRegressionTests(unittest.TestCase):
 class RetiredWorkerTests(unittest.TestCase):
     """The cna-worker image is retired (core REVIEW.md R-016); nothing may deploy one again."""
 
+    def test_deploy_wakes_every_service_without_asserting_replica_counts_during_verify(self):
+        workflow = yaml.safe_load((WORKFLOWS / "210-deploy.yml").read_text(encoding="utf-8"))
+        roll = next(
+            step["run"]
+            for step in workflow["jobs"]["apply"]["steps"]
+            if step.get("name") == "Roll ECS services to pick up updated secrets"
+        )
+        services = ("web", "api")
+        for service in services:
+            self.assertIn(f'"${{NAME_PREFIX}}-{service}"', roll)
+        self.assertIn('if [ "$DESIRED" = "0" ]; then', roll)
+        self.assertIn("--desired-count 1 --force-new-deployment", roll)
+        self.assertIn(
+            'aws ecs wait services-stable --cluster "$CLUSTER" --services '
+            '"${NAME_PREFIX}-web" "${NAME_PREFIX}-api"',
+            roll,
+        )
+
+        verify_scripts = "\n".join(
+            step["run"] for step in workflow["jobs"]["verify"]["steps"] if "run" in step
+        )
+        self.assertNotIn("desiredCount", verify_scripts)
+        self.assertNotIn("runningCount", verify_scripts)
+        self.assertIsNone(WORKER.search(verify_scripts))
+
     def compare_step(self):
         workflow = yaml.safe_load((WORKFLOWS / "230-image-update.yml").read_text(encoding="utf-8"))
         return next(step for step in workflow["jobs"]["detect"]["steps"] if step.get("id") == "compare")["run"]
